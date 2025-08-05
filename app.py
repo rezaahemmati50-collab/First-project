@@ -14,21 +14,28 @@ def get_data(symbol):
     return data
 
 def generate_signal(data):
-    # محاسبه اندیکاتورها
-    rsi = ta.momentum.RSIIndicator(data['Close']).rsi()
-    macd = ta.trend.MACD(data['Close']).macd_diff()
+    # بررسی خالی بودن دیتا یا نبودن ستون Close
+    if data.empty or 'Close' not in data or data['Close'].isnull().all():
+        return "⚠️ داده کافی نیست برای تحلیل"
 
-    # آخرین مقدارها
-    last_rsi = rsi.iloc[-1]
-    last_macd = macd.iloc[-1]
+    try:
+        close = data['Close'].ffill()  # پر کردن مقادیر خالی
+        rsi = ta.momentum.RSIIndicator(close).rsi()
+        macd = ta.trend.MACD(close).macd_diff()
 
-    # منطق ساده سیگنال
-    if last_rsi < 30 and last_macd > 0:
-        return "🔵 خرید (Buy)"
-    elif last_rsi > 70 and last_macd < 0:
-        return "🔴 فروش (Sell)"
-    else:
-        return "🟡 نگه‌داری (Hold)"
+        # آخرین مقدارها
+        last_rsi = rsi.iloc[-1]
+        last_macd = macd.iloc[-1]
+
+        # منطق ساده سیگنال
+        if last_rsi < 30 and last_macd > 0:
+            return "🔵 خرید (Buy)"
+        elif last_rsi > 70 and last_macd < 0:
+            return "🔴 فروش (Sell)"
+        else:
+            return "🟡 نگه‌داری (Hold)"
+    except Exception as e:
+        return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
 # -----------------------------
 # رابط کاربری
@@ -50,10 +57,15 @@ symbol = assets[asset_name]
 with st.spinner("در حال دریافت اطلاعات..."):
     data = get_data(symbol)
 
-# نمایش نمودار
+# بررسی اگر داده‌ای نبود
+if data.empty:
+    st.error("⚠️ داده‌ای برای این ارز پیدا نشد.")
+    st.stop()
+
+# نمایش نمودار قیمت
 st.line_chart(data['Close'])
 
-# نمایش سیگنال
+# محاسبه و نمایش سیگنال
 signal = generate_signal(data)
 st.subheader(f"📊 سیگنال پیشنهادی برای {asset_name}:")
 st.markdown(f"### {signal}")
