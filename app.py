@@ -5,14 +5,13 @@ import ta
 import numpy as np
 from prophet import Prophet
 
-# تنظیمات صفحه
-st.set_page_config(page_title="تحلیل و پیش‌بینی ارز دیجیتال", layout="centered")
+st.set_page_config(page_title="تحلیل بازار ارز دیجیتال", layout="centered")
 
 # دریافت داده از یاهو فایننس
 def get_data(symbol):
     return yf.download(symbol, period="3mo", interval="1d")
 
-# سیگنال تحلیل تکنیکال
+# سیگنال تحلیل تکنیکال با RSI و MACD
 def generate_signal(data):
     if data.empty or 'Close' not in data.columns:
         return "⚠️ داده‌ای برای تحلیل وجود ندارد"
@@ -36,11 +35,11 @@ def generate_signal(data):
     except Exception as e:
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
-# پیش‌بینی قیمت با Prophet (نسخه نهایی و بدون خطا)
+# پیش‌بینی قیمت با Prophet
 def predict_with_prophet(data, days=3):
     df = data[['Close']].copy().reset_index()
 
-    # تعیین نام ستون‌های مورد نیاز Prophet
+    # تنظیم ستون‌ها برای Prophet
     if 'Date' in df.columns:
         df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
     elif 'index' in df.columns:
@@ -50,7 +49,9 @@ def predict_with_prophet(data, days=3):
 
     df['ds'] = pd.to_datetime(df['ds'])
     df['y'] = df['y'].astype(float)
-    df['y'] = pd.Series(df['y'].values.flatten(), index=df.index)  # تبدیل به 1D
+
+    # 🔧 تبدیل y به آرایه یک‌بعدی
+    df['y'] = pd.Series(np.ravel(df['y']), index=df.index)
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
@@ -61,7 +62,7 @@ def predict_with_prophet(data, days=3):
     predicted = forecast[['ds', 'yhat']].tail(days)
     return predicted
 
-# رابط کاربری
+# رابط کاربری Streamlit
 st.title("📊 تحلیل و پیش‌بینی بازار ارز دیجیتال")
 
 assets = {
@@ -79,7 +80,7 @@ assets = {
 asset_name = st.selectbox("🪙 انتخاب ارز دیجیتال:", list(assets.keys()))
 symbol = assets[asset_name]
 
-with st.spinner("⏳ در حال دریافت داده..."):
+with st.spinner("⏳ در حال دریافت داده‌ها..."):
     data = get_data(symbol)
 
 if data.empty:
@@ -102,7 +103,6 @@ try:
     predicted_df['yhat'] = predicted_df['yhat'].round(2)
     predicted_df['ds'] = predicted_df['ds'].dt.date
     predicted_df.columns = ['تاریخ', 'قیمت پیش‌بینی‌شده (USD)']
-
     st.table(predicted_df)
 except Exception as e:
     st.error(f"⚠️ خطا در پیش‌بینی قیمت: {e}")
