@@ -24,9 +24,9 @@ def generate_signal(data):
 
     close = data['Close'].ffill()
 
-    # بررسی اگر تمام مقادیر Close خالی باشند
-    if close.isnull().all():
-        return "⚠️ مقادیر Close خالی هستند"
+    # بررسی اینکه کل ستون Close بعد از حذف NaN خالی نباشه
+    if close.dropna().empty:
+        return "⚠️ مقادیر Close معتبر نیستند"
 
     try:
         # محاسبه اندیکاتورها
