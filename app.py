@@ -3,33 +3,27 @@ import yfinance as yf
 import pandas as pd
 import ta
 import numpy as np
-from sklearn.linear_model import LinearRegression
+from prophet import Prophet
 
 # تنظیمات صفحه
-st.set_page_config(page_title="Crypto Signal App", page_icon="📈", layout="centered")
+st.set_page_config(page_title="پیش‌بینی و تحلیل بازار ارز دیجیتال", page_icon="📊", layout="centered")
 
-# -----------------------------
-# دریافت داده از yfinance
-# -----------------------------
+# ----------------------------------------
+# دریافت داده از Yahoo Finance
+# ----------------------------------------
 def get_data(symbol):
     data = yf.download(symbol, period="3mo", interval="1d")
     return data
 
-# -----------------------------
-# تولید سیگنال خرید/فروش
-# -----------------------------
+# ----------------------------------------
+# تولید سیگنال خرید/فروش با RSI و MACD
+# ----------------------------------------
 def generate_signal(data):
-    if data.empty:
+    if data.empty or 'Close' not in data.columns:
         return "⚠️ داده‌ای برای تحلیل وجود ندارد"
-
-    if 'Close' not in data.columns:
-        return "⚠️ ستون Close در داده‌ها موجود نیست"
 
     close = data['Close'].ffill()
     close = pd.Series(close.values.flatten(), index=close.index)
-
-    if close.dropna().empty:
-        return "⚠️ مقادیر Close معتبر نیستند"
 
     try:
         rsi = ta.momentum.RSIIndicator(close).rsi()
@@ -47,29 +41,26 @@ def generate_signal(data):
     except Exception as e:
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
-# -----------------------------
-# پیش‌بینی قیمت با مدل ML ساده
-# -----------------------------
-def predict_price(data, days_ahead=1):
-    close = data['Close'].ffill()
-    close = pd.Series(close.values.flatten(), index=close.index)
+# ----------------------------------------
+# پیش‌بینی قیمت با مدل Prophet (3 روز آینده)
+# ----------------------------------------
+def predict_with_prophet(data, days=3):
+    df = data[['Close']].dropna().reset_index()
+    df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
 
-    df = close.reset_index()
-    df['Days'] = np.arange(len(df))
-    X = df[['Days']]
-    y = df['Close']
+    model = Prophet(daily_seasonality=True)
+    model.fit(df)
 
-    model = LinearRegression()
-    model.fit(X, y)
+    future = model.make_future_dataframe(periods=days)
+    forecast = model.predict(future)
 
-    next_day = np.array([[len(df) + days_ahead - 1]])
-    predicted_price = model.predict(next_day)[0]
-    return predicted_price
+    predicted = forecast[['ds', 'yhat']].tail(days)
+    return predicted
 
-# -----------------------------
-# رابط کاربری Streamlit
-# -----------------------------
-st.title("📈 پیشنهاد خرید/فروش + پیش‌بینی قیمت ارز دیجیتال")
+# ----------------------------------------
+# رابط کاربری اصلی Streamlit
+# ----------------------------------------
+st.title("📊 تحلیل و پیش‌بینی بازار ارز دیجیتال")
 
 assets = {
     "Bitcoin (BTC)": "BTC-USD",
@@ -90,14 +81,24 @@ if data.empty:
     st.stop()
 
 # نمایش نمودار قیمت
+st.subheader("📈 نمودار قیمت")
 st.line_chart(data['Close'])
 
 # نمایش سیگنال خرید/فروش
 signal = generate_signal(data)
-st.subheader(f"📊 سیگنال پیشنهادی برای {asset_name}:")
+st.subheader(f"📌 سیگنال پیشنهادی برای {asset_name}:")
 st.markdown(f"### {signal}")
 
-# پیش‌بینی قیمت فردا
-st.subheader("🤖 پیش‌بینی قیمت با مدل ML ساده")
-predicted = predict_price(data, days_ahead=1)
-st.write(f"📅 پیش‌بینی قیمت فردا برای {asset_name}: **${predicted:.2f}**")
+# نمایش پیش‌بینی قیمت با Prophet
+st.subheader("🤖 پیش‌بینی قیمت با مدل Prophet (۳ روز آینده)")
+
+try:
+    predicted_df = predict_with_prophet(data, days=3)
+    predicted_df['yhat'] = predicted_df['yhat'].round(2)
+    predicted_df['ds'] = predicted_df['ds'].dt.date
+    predicted_df.columns = ['تاریخ', 'قیمت پیش‌بینی‌شده (دلار)']
+
+    st.table(predicted_df)
+
+except Exception as e:
+    st.error(f"⚠️ خطا در پیش‌بینی قیمت: {e}")
