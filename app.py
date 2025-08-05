@@ -6,7 +6,7 @@ import numpy as np
 from prophet import Prophet
 
 # تنظیمات صفحه
-st.set_page_config(page_title="پیش‌بینی و تحلیل بازار ارز دیجیتال", page_icon="📊", layout="centered")
+st.set_page_config(page_title="تحلیل بازار ارز دیجیتال", page_icon="📈", layout="centered")
 
 # ----------------------------------------
 # دریافت داده از Yahoo Finance
@@ -42,11 +42,21 @@ def generate_signal(data):
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
 # ----------------------------------------
-# پیش‌بینی قیمت با مدل Prophet (3 روز آینده)
+# پیش‌بینی قیمت با مدل Prophet (۳ روز آینده)
 # ----------------------------------------
 def predict_with_prophet(data, days=3):
-    df = data[['Close']].dropna().reset_index()
-    df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
+    df = data[['Close']].copy()
+    df = df.reset_index()
+
+    # شناسایی ستون تاریخ
+    if 'Date' in df.columns:
+        df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
+    elif 'index' in df.columns:
+        df.rename(columns={'index': 'ds', 'Close': 'y'}, inplace=True)
+
+    # اطمینان از فرمت صحیح
+    df['ds'] = pd.to_datetime(df['ds'])
+    df['y'] = df['y'].astype(float)
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
@@ -58,9 +68,9 @@ def predict_with_prophet(data, days=3):
     return predicted
 
 # ----------------------------------------
-# رابط کاربری اصلی Streamlit
+# رابط کاربری Streamlit
 # ----------------------------------------
-st.title("📊 تحلیل و پیش‌بینی بازار ارز دیجیتال")
+st.title("📊 تحلیل و پیش‌بینی ارز دیجیتال")
 
 assets = {
     "Bitcoin (BTC)": "BTC-USD",
@@ -73,7 +83,7 @@ assets = {
 asset_name = st.selectbox("✅ انتخاب ارز:", list(assets.keys()))
 symbol = assets[asset_name]
 
-with st.spinner("⏳ در حال دریافت داده‌ها..."):
+with st.spinner("در حال دریافت داده‌ها..."):
     data = get_data(symbol)
 
 if data.empty:
@@ -81,15 +91,15 @@ if data.empty:
     st.stop()
 
 # نمایش نمودار قیمت
-st.subheader("📈 نمودار قیمت")
+st.subheader("📈 نمودار قیمت بسته شدن")
 st.line_chart(data['Close'])
 
-# نمایش سیگنال خرید/فروش
-signal = generate_signal(data)
+# سیگنال خرید/فروش
 st.subheader(f"📌 سیگنال پیشنهادی برای {asset_name}:")
+signal = generate_signal(data)
 st.markdown(f"### {signal}")
 
-# نمایش پیش‌بینی قیمت با Prophet
+# پیش‌بینی قیمت با Prophet
 st.subheader("🤖 پیش‌بینی قیمت با مدل Prophet (۳ روز آینده)")
 
 try:
@@ -99,6 +109,5 @@ try:
     predicted_df.columns = ['تاریخ', 'قیمت پیش‌بینی‌شده (دلار)']
 
     st.table(predicted_df)
-
 except Exception as e:
     st.error(f"⚠️ خطا در پیش‌بینی قیمت: {e}")
