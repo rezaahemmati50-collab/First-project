@@ -11,7 +11,7 @@ st.set_page_config(page_title="تحلیل بازار ارز دیجیتال", lay
 def get_data(symbol):
     return yf.download(symbol, period="3mo", interval="1d")
 
-# سیگنال تحلیل تکنیکال با RSI و MACD
+# تحلیل تکنیکال با RSI و MACD
 def generate_signal(data):
     if data.empty or 'Close' not in data.columns:
         return "⚠️ داده‌ای برای تحلیل وجود ندارد"
@@ -27,9 +27,9 @@ def generate_signal(data):
         last_macd = macd.iloc[-1]
 
         if last_rsi < 30 and last_macd > 0:
-            return "🔵 خرید (Buy)"
+            return "🔵 سیگنال خرید (Buy)"
         elif last_rsi > 70 and last_macd < 0:
-            return "🔴 فروش (Sell)"
+            return "🔴 سیگنال فروش (Sell)"
         else:
             return "🟡 نگه‌داری (Hold)"
     except Exception as e:
@@ -39,7 +39,6 @@ def generate_signal(data):
 def predict_with_prophet(data, days=3):
     df = data[['Close']].copy().reset_index()
 
-    # تنظیم ستون‌ها برای Prophet
     if 'Date' in df.columns:
         df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
     elif 'index' in df.columns:
@@ -49,9 +48,7 @@ def predict_with_prophet(data, days=3):
 
     df['ds'] = pd.to_datetime(df['ds'])
     df['y'] = df['y'].astype(float)
-
-    # 🔧 تبدیل y به آرایه یک‌بعدی
-    df['y'] = pd.Series(np.ravel(df['y']), index=df.index)
+    df['y'] = pd.Series(df['y'].squeeze().ravel(), index=df.index)  # کلید حل خطای 1D
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
@@ -62,7 +59,7 @@ def predict_with_prophet(data, days=3):
     predicted = forecast[['ds', 'yhat']].tail(days)
     return predicted
 
-# رابط کاربری Streamlit
+# رابط کاربری
 st.title("📊 تحلیل و پیش‌بینی بازار ارز دیجیتال")
 
 assets = {
@@ -87,17 +84,14 @@ if data.empty:
     st.error("⚠️ داده‌ای برای این ارز پیدا نشد.")
     st.stop()
 
-# نمودار قیمت
-st.subheader("📈 نمودار قیمت بسته شدن")
+st.subheader("📈 نمودار قیمت")
 st.line_chart(data['Close'])
 
-# تحلیل تکنیکال
-st.subheader(f"📌 سیگنال تحلیل برای {asset_name}")
+st.subheader("📌 سیگنال تحلیل تکنیکال")
 signal = generate_signal(data)
 st.markdown(f"### {signal}")
 
-# پیش‌بینی قیمت
-st.subheader("🤖 پیش‌بینی قیمت با مدل Prophet (۳ روز آینده)")
+st.subheader("🤖 پیش‌بینی قیمت با Prophet (۳ روز آینده)")
 try:
     predicted_df = predict_with_prophet(data, days=3)
     predicted_df['yhat'] = predicted_df['yhat'].round(2)
