@@ -2,7 +2,10 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
+import numpy as np
+from sklearn.linear_model import LinearRegression
 
+# تنظیمات صفحه
 st.set_page_config(page_title="Crypto Signal App", page_icon="📈", layout="centered")
 
 # -----------------------------
@@ -22,7 +25,6 @@ def generate_signal(data):
     if 'Close' not in data.columns:
         return "⚠️ ستون Close در داده‌ها موجود نیست"
 
-    # اطمینان از اینکه داده Close تک‌بعدی و بدون NaN است
     close = data['Close'].ffill()
     close = pd.Series(close.values.flatten(), index=close.index)
 
@@ -30,14 +32,12 @@ def generate_signal(data):
         return "⚠️ مقادیر Close معتبر نیستند"
 
     try:
-        # محاسبه اندیکاتورها
         rsi = ta.momentum.RSIIndicator(close).rsi()
         macd = ta.trend.MACD(close).macd_diff()
 
         last_rsi = rsi.iloc[-1]
         last_macd = macd.iloc[-1]
 
-        # منطق سیگنال‌دهی
         if last_rsi < 30 and last_macd > 0:
             return "🔵 خرید (Buy)"
         elif last_rsi > 70 and last_macd < 0:
@@ -48,9 +48,28 @@ def generate_signal(data):
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
 # -----------------------------
-# رابط کاربری با Streamlit
+# پیش‌بینی قیمت با مدل ML ساده
 # -----------------------------
-st.title("📈 پیشنهاد خرید/فروش ارز دیجیتال")
+def predict_price(data, days_ahead=1):
+    close = data['Close'].ffill()
+    close = pd.Series(close.values.flatten(), index=close.index)
+
+    df = close.reset_index()
+    df['Days'] = np.arange(len(df))
+    X = df[['Days']]
+    y = df['Close']
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    next_day = np.array([[len(df) + days_ahead - 1]])
+    predicted_price = model.predict(next_day)[0]
+    return predicted_price
+
+# -----------------------------
+# رابط کاربری Streamlit
+# -----------------------------
+st.title("📈 پیشنهاد خرید/فروش + پیش‌بینی قیمت ارز دیجیتال")
 
 assets = {
     "Bitcoin (BTC)": "BTC-USD",
@@ -70,10 +89,15 @@ if data.empty:
     st.error("⚠️ داده‌ای برای این ارز پیدا نشد.")
     st.stop()
 
-# نمودار قیمت
+# نمایش نمودار قیمت
 st.line_chart(data['Close'])
 
-# سیگنال خرید/فروش
+# نمایش سیگنال خرید/فروش
 signal = generate_signal(data)
 st.subheader(f"📊 سیگنال پیشنهادی برای {asset_name}:")
 st.markdown(f"### {signal}")
+
+# پیش‌بینی قیمت فردا
+st.subheader("🤖 پیش‌بینی قیمت با مدل ML ساده")
+predicted = predict_price(data, days_ahead=1)
+st.write(f"📅 پیش‌بینی قیمت فردا برای {asset_name}: **${predicted:.2f}**")
