@@ -2,5 +2,5 @@ streamlit
 yfinance
 pandas
 ta
-scikit-learn
 numpy
+prophet
