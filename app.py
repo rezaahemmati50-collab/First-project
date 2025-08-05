@@ -5,14 +5,14 @@ import ta
 import numpy as np
 from prophet import Prophet
 
-# تنظیم صفحه
+# تنظیمات صفحه
 st.set_page_config(page_title="تحلیل و پیش‌بینی ارز دیجیتال", layout="centered")
 
-# دریافت داده از Yahoo Finance
+# دریافت داده از یاهو فایننس
 def get_data(symbol):
     return yf.download(symbol, period="3mo", interval="1d")
 
-# تولید سیگنال خرید/فروش با RSI و MACD
+# سیگنال تحلیل تکنیکال
 def generate_signal(data):
     if data.empty or 'Close' not in data.columns:
         return "⚠️ داده‌ای برای تحلیل وجود ندارد"
@@ -36,10 +36,11 @@ def generate_signal(data):
     except Exception as e:
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
-# پیش‌بینی قیمت با Prophet (نسخه اصلاح‌شده)
+# پیش‌بینی قیمت با Prophet (نسخه نهایی و بدون خطا)
 def predict_with_prophet(data, days=3):
     df = data[['Close']].copy().reset_index()
 
+    # تعیین نام ستون‌های مورد نیاز Prophet
     if 'Date' in df.columns:
         df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
     elif 'index' in df.columns:
@@ -48,7 +49,8 @@ def predict_with_prophet(data, days=3):
         df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
 
     df['ds'] = pd.to_datetime(df['ds'])
-    df['y'] = pd.Series(df['y'].values.flatten())
+    df['y'] = df['y'].astype(float)
+    df['y'] = pd.Series(df['y'].values.flatten(), index=df.index)  # تبدیل به 1D
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
@@ -88,7 +90,7 @@ if data.empty:
 st.subheader("📈 نمودار قیمت بسته شدن")
 st.line_chart(data['Close'])
 
-# تحلیل و سیگنال
+# تحلیل تکنیکال
 st.subheader(f"📌 سیگنال تحلیل برای {asset_name}")
 signal = generate_signal(data)
 st.markdown(f"### {signal}")
