@@ -46,7 +46,10 @@ def predict_with_prophet(data, days=3):
         df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
 
     df['ds'] = pd.to_datetime(df['ds'])
-    df['y'] = df['y'].astype(float)  # اصلاح‌شده
+    df['y'] = pd.Series(df['y'].values.flatten(), dtype='float64')
+
+    if df['y'].ndim != 1:
+        raise ValueError("ستون y باید یک سری 1بعدی باشد")
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
