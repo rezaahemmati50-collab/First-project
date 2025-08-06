@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
-import numpy as np
 from prophet import Prophet
 
 st.set_page_config(page_title="تحلیل بازار ارز دیجیتال", layout="centered")
@@ -47,7 +46,7 @@ def predict_with_prophet(data, days=3):
         df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
 
     df['ds'] = pd.to_datetime(df['ds'])
-    df['y'] = df['y'].astype(float)  # اصلاح شده: فقط تبدیل نوع کافی است
+    df['y'] = df['y'].astype(float)  # اصلاح‌شده
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
