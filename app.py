@@ -34,34 +34,18 @@ def generate_signal(data):
     except Exception as e:
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
-# پیش‌بینی قیمت با Prophet
+# پیش‌بینی قیمت با Prophet (اصلاح‌شده)
 def predict_with_prophet(data, days=3):
     df = data[['Close']].copy()
-
-    # اطمینان از اینکه index شامل تاریخ است
     df = df.reset_index()
+    df.columns = ['ds', 'y']
 
-    # بررسی نام ستون تاریخ
-    if 'Date' in df.columns:
-        df.rename(columns={'Date': 'ds'}, inplace=True)
-    elif 'index' in df.columns:
-        df.rename(columns={'index': 'ds'}, inplace=True)
-    else:
-        df.rename(columns={df.columns[0]: 'ds'}, inplace=True)
-
-    # تغییر نام ستون قیمت به 'y'
-    df.rename(columns={'Close': 'y'}, inplace=True)
-
-    # تبدیل به فرمت مورد انتظار Prophet
     df['ds'] = pd.to_datetime(df['ds'])
     df['y'] = pd.to_numeric(df['y'], errors='coerce')
+    df.dropna(subset=['ds', 'y'], inplace=True)
 
-    # حذف ردیف‌هایی با مقادیر نامعتبر
-    df = df.dropna(subset=['ds', 'y'])
-
-    # بررسی نهایی
-    if 'ds' not in df.columns or 'y' not in df.columns:
-        raise ValueError("ستون‌های مورد نیاز 'ds' و 'y' موجود نیستند.")
+    if not isinstance(df['y'], pd.Series) or df['y'].ndim != 1:
+        raise ValueError("ستون 'y' باید یک Series یک‌بعدی باشد.")
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
