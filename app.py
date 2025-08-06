@@ -38,22 +38,23 @@ def generate_signal(data):
 def predict_with_prophet(data, days=3):
     df = data[['Close']].copy().reset_index()
 
-    if 'Date' in df.columns:
-        df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
-    elif 'index' in df.columns:
-        df.rename(columns={'index': 'ds', 'Close': 'y'}, inplace=True)
-    else:
-        df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
-
+    # تعیین ستون‌ها برای Prophet
+    df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
     df['ds'] = pd.to_datetime(df['ds'])
-    df['y'] = pd.Series(df['y'].values.flatten(), dtype='float64')
+    df['y'] = pd.to_numeric(df['y'], errors='coerce')
 
+    # حذف داده‌های نامعتبر
+    df = df.dropna(subset=['ds', 'y'])
+
+    # بررسی نهایی
     if df['y'].ndim != 1:
-        raise ValueError("ستون y باید یک سری 1بعدی باشد")
+        raise ValueError("ستون y باید یک Series یک‌بعدی باشد.")
 
+    # ساخت مدل Prophet
     model = Prophet(daily_seasonality=True)
     model.fit(df)
 
+    # پیش‌بینی
     future = model.make_future_dataframe(periods=days)
     forecast = model.predict(future)
 
