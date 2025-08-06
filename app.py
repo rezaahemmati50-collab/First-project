@@ -35,9 +35,8 @@ def generate_signal(data):
         return f"⚠️ خطا در محاسبه اندیکاتورها: {e}"
 
 # پیش‌بینی قیمت با Prophet
-def predict_with_prophet(data, days=3):
-    df = data[['Close']].copy()
-    df = df.reset_index()
+def predict_with_prophet(data, days):
+    df = data[['Close']].copy().reset_index()
     df.columns = ['ds', 'y']
 
     df['ds'] = pd.to_datetime(df['ds'])
@@ -73,20 +72,19 @@ assets = {
 
 asset_name = st.selectbox("🪙 انتخاب ارز دیجیتال:", list(assets.keys()) + ["🔤 وارد کردن دستی..."])
 
-# اگر وارد کردن دستی انتخاب شد:
 if asset_name == "🔤 وارد کردن دستی...":
     custom_symbol = st.text_input("نماد ارز دلخواه را وارد کنید (مثلاً SHIB-USD):")
     symbol = custom_symbol.strip().upper()
 else:
     symbol = assets[asset_name]
 
-# دریافت و تحلیل داده‌ها
+# دریافت داده‌ها
 if symbol:
     with st.spinner("⏳ در حال دریافت داده‌ها..."):
         data = get_data(symbol)
 
     if data.empty:
-        st.error("⚠️ داده‌ای برای این نماد پیدا نشد. لطفاً مطمئن شوید نماد را درست وارد کرده‌اید.")
+        st.error("⚠️ داده‌ای برای این نماد پیدا نشد. لطفاً نماد را بررسی کنید.")
         st.stop()
 
     st.subheader("📈 نمودار قیمت")
@@ -96,9 +94,12 @@ if symbol:
     signal = generate_signal(data)
     st.markdown(f"### {signal}")
 
-    st.subheader("🤖 پیش‌بینی قیمت با Prophet (۳ روز آینده)")
+    # پیش‌بینی قیمت
+    st.subheader("🤖 پیش‌بینی قیمت با Prophet")
+    forecast_days = st.selectbox("⏱ بازه زمانی پیش‌بینی:", [3, 7, 30], format_func=lambda x: f"{x} روز آینده")
+
     try:
-        predicted_df = predict_with_prophet(data, days=3)
+        predicted_df = predict_with_prophet(data, days=forecast_days)
         predicted_df['yhat'] = predicted_df['yhat'].round(2)
         predicted_df['ds'] = predicted_df['ds'].dt.date
         predicted_df.columns = ['تاریخ', 'قیمت پیش‌بینی‌شده (USD)']
