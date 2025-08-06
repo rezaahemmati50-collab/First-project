@@ -36,25 +36,36 @@ def generate_signal(data):
 
 # پیش‌بینی قیمت با Prophet
 def predict_with_prophet(data, days=3):
-    df = data[['Close']].copy().reset_index()
+    df = data[['Close']].copy()
 
-    # تعیین ستون‌ها برای Prophet
-    df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
+    # اطمینان از اینکه index شامل تاریخ است
+    df = df.reset_index()
+
+    # بررسی نام ستون تاریخ
+    if 'Date' in df.columns:
+        df.rename(columns={'Date': 'ds'}, inplace=True)
+    elif 'index' in df.columns:
+        df.rename(columns={'index': 'ds'}, inplace=True)
+    else:
+        df.rename(columns={df.columns[0]: 'ds'}, inplace=True)
+
+    # تغییر نام ستون قیمت به 'y'
+    df.rename(columns={'Close': 'y'}, inplace=True)
+
+    # تبدیل به فرمت مورد انتظار Prophet
     df['ds'] = pd.to_datetime(df['ds'])
     df['y'] = pd.to_numeric(df['y'], errors='coerce')
 
-    # حذف داده‌های نامعتبر
+    # حذف ردیف‌هایی با مقادیر نامعتبر
     df = df.dropna(subset=['ds', 'y'])
 
     # بررسی نهایی
-    if df['y'].ndim != 1:
-        raise ValueError("ستون y باید یک Series یک‌بعدی باشد.")
+    if 'ds' not in df.columns or 'y' not in df.columns:
+        raise ValueError("ستون‌های مورد نیاز 'ds' و 'y' موجود نیستند.")
 
-    # ساخت مدل Prophet
     model = Prophet(daily_seasonality=True)
     model.fit(df)
 
-    # پیش‌بینی
     future = model.make_future_dataframe(periods=days)
     forecast = model.predict(future)
 
