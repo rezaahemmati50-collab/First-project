@@ -47,8 +47,7 @@ def predict_with_prophet(data, days=3):
         df.rename(columns={df.columns[0]: 'ds', 'Close': 'y'}, inplace=True)
 
     df['ds'] = pd.to_datetime(df['ds'])
-    df['y'] = df['y'].astype(float)
-    df['y'] = pd.Series(df['y'].squeeze().ravel(), index=df.index)  # کلید حل خطای 1D
+    df['y'] = df['y'].astype(float)  # اصلاح شده: فقط تبدیل نوع کافی است
 
     model = Prophet(daily_seasonality=True)
     model.fit(df)
