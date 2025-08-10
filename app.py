@@ -1,67 +1,111 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from prophet import Prophet
-from prophet.plot import plot_plotly
 import plotly.graph_objs as go
-from datetime import date
+from datetime import date, timedelta
 
-# عنوان
-st.set_page_config(page_title="Crypto Price Prediction", layout="wide")
-st.title("💹 پیش‌بینی و تحلیل بازار ارز دیجیتال")
+# -------------------------------
+# تنظیمات صفحه
+# -------------------------------
+st.set_page_config(page_title="Crypto Dashboard", layout="wide")
+st.title("📊 داشبورد پیش‌بینی و تحلیل ارز دیجیتال")
 
-# انتخاب ارز
-cryptos = {
-    "Bitcoin (BTC-USD)": "BTC-USD",
-    "Ethereum (ETH-USD)": "ETH-USD",
-    "Cardano (ADA-USD)": "ADA-USD",
-    "Ripple (XRP-USD)": "XRP-USD"
+# -------------------------------
+# انتخاب ارز و بازه زمانی
+# -------------------------------
+crypto_list = {
+    "Bitcoin": "BTC-USD",
+    "Ethereum": "ETH-USD",
+    "Cardano": "ADA-USD",
+    "XRP": "XRP-USD",
+    "Stellar": "XLM-USD"
 }
-coin = st.selectbox("ارز دیجیتال مورد نظر را انتخاب کنید:", list(cryptos.keys()))
-symbol = cryptos[coin]
 
-# محدوده تاریخ
-start_date = st.date_input("تاریخ شروع", value=pd.to_datetime("2023-01-01"))
+col1, col2 = st.columns(2)
+with col1:
+    crypto_name = st.selectbox("ارز دیجیتال را انتخاب کنید:", list(crypto_list.keys()))
+with col2:
+    days_ahead = st.slider("تعداد روزهای پیش‌بینی:", 1, 10, 5)
+
+symbol = crypto_list[crypto_name]
+
+# -------------------------------
+# دریافت داده‌ها
+# -------------------------------
 end_date = date.today()
+start_date = end_date - timedelta(days=365)
 
-# دریافت داده
 data = yf.download(symbol, start=start_date, end=end_date)
-data.reset_index(inplace=True)
 
-st.subheader("📊 داده‌های تاریخی")
-st.dataframe(data.tail())
+if data.empty:
+    st.error("❌ داده‌ای برای این ارز یافت نشد. لطفاً ارز دیگری انتخاب کنید.")
+    st.stop()
 
-# نمودار قیمت بسته شدن
-fig_close = go.Figure()
-fig_close.add_trace(go.Scatter(
-    x=data['Date'],
-    y=data['Close'].tolist(),
-    name="قیمت بسته شدن",
-    line=dict(color='royalblue', width=2)
+# اطمینان از اینکه ستون Close موجود است
+if 'Close' not in data.columns:
+    st.error("ستون قیمت بسته شدن (Close) در داده‌ها یافت نشد.")
+    st.stop()
+
+# -------------------------------
+# نمایش جدول
+# -------------------------------
+st.subheader("📅 داده‌های اخیر بازار")
+st.dataframe(data.tail(10))
+
+# -------------------------------
+# ترسیم نمودار قیمت
+# -------------------------------
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=data.index,
+    y=data['Close'],
+    mode='lines',
+    name='قیمت بسته شدن',
+    line=dict(color='cyan')
 ))
-fig_close.update_layout(
-    title="نمودار قیمت بسته شدن",
+fig.update_layout(
+    title=f"نمودار قیمت {crypto_name}",
     xaxis_title="تاریخ",
     yaxis_title="قیمت (USD)",
     template="plotly_dark"
 )
-st.plotly_chart(fig_close, use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)
 
-# مدل Prophet برای پیش‌بینی
-df_train = data[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
-model = Prophet(daily_seasonality=True)
-model.fit(df_train)
+# -------------------------------
+# پیش‌بینی ساده (با میانگین متحرک)
+# -------------------------------
+data['MA_7'] = data['Close'].rolling(window=7).mean()
+last_price = data['Close'].iloc[-1]
+future_dates = [end_date + timedelta(days=i) for i in range(1, days_ahead+1)]
+predicted_prices = [last_price * (1 + (i * 0.01)) for i in range(days_ahead)]
 
-# پیش‌بینی چند روز آینده
-n_days = st.slider("تعداد روزهای پیش‌بینی", 1, 30, 7)
-future = model.make_future_dataframe(periods=n_days)
-forecast = model.predict(future)
+pred_df = pd.DataFrame({
+    "Date": future_dates,
+    "Predicted Price": predicted_prices
+})
 
-# نمایش پیش‌بینی
 st.subheader("📈 پیش‌بینی قیمت")
-fig_forecast = plot_plotly(model, forecast)
-st.plotly_chart(fig_forecast, use_container_width=True)
+st.dataframe(pred_df)
 
-# نمایش داده‌های پیش‌بینی
-st.subheader("📄 جدول پیش‌بینی")
-st.dataframe(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(n_days))
+pred_fig = go.Figure()
+pred_fig.add_trace(go.Scatter(
+    x=data.index,
+    y=data['Close'],
+    mode='lines',
+    name='تاریخچه قیمت',
+    line=dict(color='lightblue')
+))
+pred_fig.add_trace(go.Scatter(
+    x=pred_df['Date'],
+    y=pred_df['Predicted Price'],
+    mode='lines+markers',
+    name='پیش‌بینی',
+    line=dict(color='orange', dash='dash')
+))
+pred_fig.update_layout(
+    title="پیش‌بینی قیمت در روزهای آینده",
+    xaxis_title="تاریخ",
+    yaxis_title="قیمت (USD)",
+    template="plotly_dark"
+)
+st.plotly_chart(pred_fig, use_container_width=True)
