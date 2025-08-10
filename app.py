@@ -3,86 +3,68 @@ import pandas as pd
 import yfinance as yf
 from prophet import Prophet
 from prophet.plot import plot_plotly
-from datetime import date
+from plotly import graph_objs as go
 
-# -----------------------------
-# تنظیمات اولیه
-# -----------------------------
-START = "2018-01-01"
-TODAY = date.today().strftime("%Y-%m-%d")
+# App title
+st.title("📈 Cryptocurrency Price Forecast App")
 
-st.title("📈 پیش‌بینی قیمت ارز دیجیتال با Prophet")
-
-# -----------------------------
-# انتخاب ارز دیجیتال
-# -----------------------------
-cryptos = ("BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD")
-selected_crypto = st.selectbox("ارز دیجیتال را انتخاب کنید:", cryptos)
-
-# -----------------------------
-# انتخاب مدت پیش‌بینی
-# -----------------------------
-n_years = st.slider("مدت پیش‌بینی (سال)", 1, 4)
+# Sidebar inputs
+st.sidebar.header("Settings")
+selected_ticker = st.sidebar.text_input("Enter cryptocurrency ticker (e.g., BTC-USD)", "BTC-USD")
+n_years = st.sidebar.slider("Years of prediction:", 1, 4)
 period = n_years * 365
 
-# -----------------------------
-# دریافت داده‌ها
-# -----------------------------
+# Load data
 @st.cache_data
 def load_data(ticker):
-    data = yf.download(ticker, START, TODAY)
-    data.reset_index(inplace=True)
-    return data
+    df = yf.download(ticker, period="5y")
+    df.reset_index(inplace=True)
+    return df
 
-data_load_state = st.text("در حال دریافت داده‌ها...")
-data = load_data(selected_crypto)
-data_load_state.text("✅ داده‌ها با موفقیت بارگذاری شدند!")
+data_load_state = st.text("Loading data...")
+df = load_data(selected_ticker)
+data_load_state.text("✅ Data loaded successfully!")
 
-st.subheader("نمایش داده‌ها")
-st.write(data.tail())
+# Display raw data
+st.subheader("Raw Data")
+st.write(df.tail())
 
-# -----------------------------
-# پیش‌پردازش برای Prophet
-# -----------------------------
-df_train = data[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
+# Plot raw data
+def plot_raw_data():
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="Close Price"))
+    fig.layout.update(title_text="Time Series Data", xaxis_rangeslider_visible=True)
+    st.plotly_chart(fig)
 
-# چک کردن ستون y
-if 'y' in df_train.columns:
-    if isinstance(df_train['y'], (pd.Series, list)):
-        df_train['y'] = pd.to_numeric(df_train['y'], errors='coerce')
-        df_train = df_train.dropna(subset=['y'])
-    else:
-        st.error("❌ ستون y فرمت درستی ندارد.")
-        st.stop()
-else:
-    st.error("❌ ستون y پیدا نشد.")
-    st.stop()
+plot_raw_data()
 
+# Prepare data for Prophet
+df_train = df[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
+
+# Ensure y is numeric and drop NaNs
+df_train['y'] = pd.to_numeric(df_train['y'], errors='coerce')
+df_train = df_train.dropna()
+
+# Check if data is available
 if df_train.empty:
-    st.error("❌ داده‌ای برای آموزش Prophet پیدا نشد.")
-    st.stop()
+    st.error("❌ No valid data available for the selected ticker.")
+else:
+    # Forecasting
+    model = Prophet()
+    model.fit(df_train)
+    future = model.make_future_dataframe(periods=period)
+    forecast = model.predict(future)
 
-# -----------------------------
-# مدل Prophet
-# -----------------------------
-m = Prophet()
-m.fit(df_train)
+    # Show forecast
+    st.subheader("Forecast Data")
+    st.write(forecast.tail())
 
-# -----------------------------
-# پیش‌بینی آینده
-# -----------------------------
-future = m.make_future_dataframe(periods=period)
-forecast = m.predict(future)
+    # Plot forecast
+    st.subheader("Forecast Plot")
+    fig1 = plot_plotly(model, forecast)
+    st.plotly_chart(fig1)
 
-# -----------------------------
-# نمایش نتایج
-# -----------------------------
-st.subheader("پیش‌بینی قیمت")
-st.write(forecast.tail())
-
-fig1 = plot_plotly(m, forecast)
-st.plotly_chart(fig1)
-
-st.subheader("ترکیب اجزای پیش‌بینی")
-fig2 = m.plot_components(forecast)
-st.write(fig2)
+    # Forecast components
+    st.subheader("Forecast Components")
+    fig2 = model.plot_components(forecast)
+    st.write(fig2)
