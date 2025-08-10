@@ -6,74 +6,69 @@ from prophet.plot import plot_plotly
 from plotly import graph_objs as go
 from datetime import date
 
-# 🎯 تنظیمات اولیه
-st.set_page_config(page_title="Crypto Forecast App", layout="wide")
-
-st.title("📈 پیش‌بینی قیمت ارز دیجیتال با Prophet")
-
-START = "2016-01-01"
-TODAY = date.today().strftime("%Y-%m-%d")
+# عنوان برنامه
+st.title("📈 پیش‌بینی قیمت ارز دیجیتال")
 
 # انتخاب ارز
-cryptos = {
-    "Bitcoin (BTC)": "BTC-USD",
-    "Ethereum (ETH)": "ETH-USD",
-    "Cardano (ADA)": "ADA-USD",
-    "Stellar (XLM)": "XLM-USD",
-    "Solana (SOL)": "SOL-USD"
-}
+cryptos = ["BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD"]
+selected_crypto = st.selectbox("انتخاب ارز دیجیتال:", cryptos)
 
-selected_crypto = st.selectbox("یک ارز انتخاب کنید:", list(cryptos.keys()))
-n_years = st.slider("تعداد سال‌های پیش‌بینی:", 1, 4)
-period = n_years * 365
+# انتخاب تعداد روزهای پیش‌بینی
+n_days = st.slider("تعداد روزهای پیش‌بینی", 1, 365, 30)
 
-# 📥 دریافت داده‌ها
+# محدوده تاریخی
+START = "2020-01-01"
+TODAY = date.today().strftime("%Y-%m-%d")
+
+# بارگذاری داده
 @st.cache_data
 def load_data(ticker):
     data = yf.download(ticker, START, TODAY)
     data.reset_index(inplace=True)
     return data
 
-data_load_state = st.text("در حال دریافت داده‌ها...")
-df = load_data(cryptos[selected_crypto])
-data_load_state.text("✅ داده‌ها با موفقیت بارگذاری شدند!")
+st.subheader("📥 در حال دریافت داده‌ها...")
+df = load_data(selected_crypto)
 
-# نمایش داده‌ها
-st.subheader("📊 داده‌های خام")
-st.write(df.tail())
-
-# 📌 آماده‌سازی دیتا برای Prophet با بررسی ایمنی
-if 'Date' not in df.columns:
-    df = df.reset_index()
-
+# بررسی ستون‌ها
 if 'Close' not in df.columns:
-    st.error("❌ ستون Close در داده‌ها یافت نشد. لطفاً تایم‌فریم یا ارز دیگری انتخاب کنید.")
+    st.error("❌ ستون Close در داده‌ها یافت نشد. لطفاً ارز یا تایم‌فریم دیگری انتخاب کنید.")
+    st.stop()
+
+if df['Close'].empty:
+    st.error("❌ ستون Close خالی است. داده‌ای برای پردازش وجود ندارد.")
+    st.stop()
+
+# آماده‌سازی داده برای Prophet
+y_values = pd.to_numeric(df['Close'], errors='coerce')
+
+if y_values.isna().all():
+    st.error("❌ همه مقادیر ستون Close نامعتبر هستند.")
     st.stop()
 
 df_train = pd.DataFrame({
     "ds": pd.to_datetime(df['Date'], errors='coerce'),
-    "y": pd.to_numeric(df['Close'], errors='coerce')
-})
+    "y": y_values
+}).dropna()
 
-df_train = df_train.dropna()
+# رسم نمودار اولیه
+st.subheader("📊 نمودار قیمت")
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="قیمت بسته شدن"))
+fig.layout.update(xaxis_rangeslider_visible=True)
+st.plotly_chart(fig)
 
-if df_train.empty:
-    st.error("❌ داده معتبر برای آموزش مدل وجود ندارد.")
-    st.stop()
+# مدل Prophet
+model = Prophet()
+model.fit(df_train)
 
-# 📈 مدل Prophet
-m = Prophet()
-m.fit(df_train)
-
-future = m.make_future_dataframe(periods=period)
-forecast = m.predict(future)
+future = model.make_future_dataframe(periods=n_days)
+forecast = model.predict(future)
 
 # نمایش پیش‌بینی
-st.subheader("📈 پیش‌بینی قیمت")
-fig1 = plot_plotly(m, forecast)
-st.plotly_chart(fig1)
+st.subheader("🔮 پیش‌بینی قیمت")
+fig_forecast = plot_plotly(model, forecast)
+st.plotly_chart(fig_forecast)
 
-# اجزای پیش‌بینی
-st.subheader("📉 اجزای پیش‌بینی")
-fig2 = m.plot_components(forecast)
-st.write(fig2)
+st.write("📅 داده‌های پیش‌بینی شده:")
+st.dataframe(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']])
