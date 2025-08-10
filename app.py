@@ -6,40 +6,37 @@ from prophet import Prophet
 st.set_page_config(page_title="تحلیل ارز دیجیتال", layout="wide")
 st.title("📊 داشبورد تحلیل ارز دیجیتال")
 
-# انتخاب ارز و بازه
+# انتخاب ارز و بازه زمانی
 symbol = st.selectbox("ارز مورد نظر را انتخاب کنید:", ["BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD"])
 period = st.selectbox("بازه زمانی:", ["1mo", "3mo", "6mo", "1y", "2y", "5y"])
 
 # دریافت داده
 data = yf.download(symbol, period=period)
 
-if data.empty or data["Close"].dropna().empty:
-    st.warning("⚠️ هیچ داده‌ای برای این بازه یافت نشد. لطفاً بازه یا ارز دیگری انتخاب کنید.")
+# اگر ستون‌ها چندسطحی (MultiIndex) بودند، ساده‌شان می‌کنیم
+if isinstance(data.columns, pd.MultiIndex):
+    data.columns = [col[0] for col in data.columns]
+
+# بررسی داده
+if data.empty or "Close" not in data.columns or data["Close"].dropna().empty:
+    st.warning("⚠️ داده‌ای یافت نشد.")
 else:
     # محاسبه میانگین متحرک
     data["MA20"] = data["Close"].rolling(window=20).mean()
     data["MA50"] = data["Close"].rolling(window=50).mean()
 
-    # آخرین قیمت - همیشه به float تبدیل می‌کنیم
-    latest_price_series = data["Close"].dropna()
-    if not latest_price_series.empty:
-        latest_price = float(latest_price_series.iloc[-1])
-        st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
-    else:
-        st.warning("⚠️ قیمت معتبر یافت نشد.")
+    # آخرین قیمت
+    latest_price = float(data["Close"].dropna().iloc[-1])
+    st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
 
-    # نمایش نمودار
-    available_cols = [col for col in ["Close", "MA20", "MA50"] if col in data.columns]
-    if available_cols:
-        st.line_chart(data[available_cols])
-    else:
-        st.warning("⚠️ ستون‌های کافی برای نمایش نمودار یافت نشد.")
+    # نمایش نمودار قیمت و میانگین‌ها
+    st.line_chart(data[["Close", "MA20", "MA50"]])
 
     # پیش‌بینی با Prophet
     df = data.reset_index()[["Date", "Close"]].dropna()
     df.rename(columns={"Date": "ds", "Close": "y"}, inplace=True)
 
-    if len(df) >= 2:  # Prophet حداقل 2 سطر نیاز دارد
+    if len(df) >= 2:
         m = Prophet()
         m.fit(df)
         future = m.make_future_dataframe(periods=30)
