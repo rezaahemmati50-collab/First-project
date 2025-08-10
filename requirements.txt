@@ -4,3 +4,4 @@ numpy
 yfinance
 prophet
 plotly
+requests
