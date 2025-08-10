@@ -1,4 +1,5 @@
-# app.py - CryptoForecast (final integrated)
+# app.py
+# CryptoForecast - Final integrated version
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +9,7 @@ from prophet.plot import plot_plotly
 import plotly.graph_objs as go
 from datetime import datetime, date
 import os
+from news.news_utils import fetch_news  # local helper (falls back to CSV if no API key)
 
 # ---------- Page config ----------
 st.set_page_config(page_title="CryptoForecast — Final", layout="wide")
@@ -18,10 +20,10 @@ def compute_sma(s, w):
     return s.rolling(window=w).mean()
 
 def compute_rsi(s, period=14):
+    # robust RSI implementation with EMA smoothing
     delta = s.diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
-    # use simple EMA smoothing to avoid NANs quickly
     ma_up = up.ewm(span=period, adjust=False, min_periods=period).mean()
     ma_down = down.ewm(span=period, adjust=False, min_periods=period).mean()
     rs = ma_up / ma_down
@@ -29,7 +31,6 @@ def compute_rsi(s, period=14):
     return rsi
 
 def safe_series(x):
-    # convert different types to pd.Series
     if isinstance(x, pd.Series):
         return x
     try:
@@ -49,29 +50,25 @@ def extract_close_series(df, primary_ticker=None):
     if df is None or (isinstance(df, pd.DataFrame) and df.empty):
         return None, "DataFrame is empty."
 
-    # If yfinance returned MultiIndex columns (multiple tickers)
+    # MultiIndex columns: e.g. when yfinance returns multiple tickers
     if isinstance(df.columns, pd.MultiIndex):
-        # try to extract level 'Close'
         try:
             if 'Close' in df.columns.get_level_values(1):
                 close_df = df.xs('Close', axis=1, level=1)
-                # If primary ticker specified and exists
                 if primary_ticker and primary_ticker in close_df.columns:
                     return close_df[primary_ticker].copy(), f"Close for {primary_ticker} selected."
-                # else take first available
                 return close_df.iloc[:, 0].copy(), f"Multiple Close columns; using first ({close_df.columns[0]})."
             else:
                 return None, "MultiIndex present but no 'Close' level found."
         except Exception as e:
             return None, f"Error extracting Close from MultiIndex: {e}"
 
-    # Normal case
+    # Normal DataFrame with column 'Close'
     if 'Close' in df.columns:
         close_col = df['Close']
         if isinstance(close_col, pd.Series):
             return close_col.copy(), "Close Series extracted."
         if isinstance(close_col, pd.DataFrame) and close_col.shape[1] > 0:
-            # data like df['Close'] returns DataFrame (rare)
             if primary_ticker and primary_ticker in close_col.columns:
                 return close_col[primary_ticker].copy(), f"Close for {primary_ticker} from df['Close']."
             return close_col.iloc[:,0].copy(), "df['Close'] is DataFrame; using first column."
@@ -95,7 +92,6 @@ def extract_close_series(df, primary_ticker=None):
 def download_data_yf(ticker, period="1y", interval="1d"):
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
-        # often df empty or multiindex; return as-is
         return df
     except Exception:
         return pd.DataFrame()
@@ -106,7 +102,6 @@ def load_uploaded_csv(uploaded_file):
     except Exception:
         return pd.DataFrame()
     cols = [c.strip().lower() for c in df.columns]
-    # ds,y
     if 'ds' in cols and 'y' in cols:
         df = df.rename(columns={df.columns[cols.index('ds')]: 'ds', df.columns[cols.index('y')]: 'y'})
         df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
@@ -129,7 +124,7 @@ interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 forecast_days = st.sidebar.slider("Forecast horizon (days)", 3, 90, 30)
 enable_prophet = st.sidebar.checkbox("Enable Prophet forecasting", value=True)
 upload_file = st.sidebar.file_uploader("Upload CSV (optional) - formats: ds,y  or Date,Close", type=["csv"])
-show_news = st.sidebar.checkbox("Show News (sample)", value=True)
+show_news = st.sidebar.checkbox("Show News (sample or live if configured)", value=True)
 auto_refresh = st.sidebar.checkbox("Auto-refresh data (manual rerun recommended)", value=False)
 
 # ---------- Data source selection ----------
@@ -150,7 +145,6 @@ with col1:
     st.write(f"History: {period} · Interval: {interval} · Forecast: {forecast_days} days")
 with col2:
     if st.button("🔄 Refresh Now"):
-        # simple control; cached functions will still respect ttl
         st.experimental_rerun()
 
 tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
@@ -163,7 +157,6 @@ results = {}
 
 for t in tickers:
     st.subheader(f"🔹 {t}")
-    # load data
     if user_df is not None and len(tickers)==1:
         df_raw = user_df.copy()
         source_msg = "uploaded CSV"
@@ -177,33 +170,27 @@ for t in tickers:
         st.error(f"❌ No data returned for {t}. Check ticker and period.")
         continue
 
-    # If yfinance returned DataFrame with columns including Date, but index may be DatetimeIndex
     if 'Date' in df_raw.columns:
         try:
             df_raw = df_raw.set_index('Date')
         except Exception:
             pass
 
-    # extract Close series robustly
     close_ser, msg = extract_close_series(df_raw, primary_ticker=t)
     st.write(f"*debug:* {msg}")
     if close_ser is None:
         st.error(f"❌ Could not extract Close for {t}. Skipping.")
         continue
 
-    # convert to numeric and drop NaNs
     close_ser = safe_to_numeric(close_ser)
     close_ser = close_ser.dropna()
     if close_ser.empty:
         st.error(f"❌ After cleaning, no numeric Close data for {t}.")
         continue
 
-    # determine index (dates)
     if isinstance(df_raw.index, pd.DatetimeIndex):
         idx = df_raw.index
-        # if lengths mismatch, try to align by length
         if len(idx) != len(close_ser):
-            # try to use close_ser.index if datetime
             try:
                 idx = pd.to_datetime(close_ser.index)
             except Exception:
@@ -220,16 +207,13 @@ for t in tickers:
         st.error(f"❌ No valid rows for {t} after building DataFrame.")
         continue
 
-    # indicators
     data['MA20'] = compute_sma(data['Close'], 20)
     data['MA50'] = compute_sma(data['Close'], 50)
     data['MA200'] = compute_sma(data['Close'], 200)
     data['RSI14'] = compute_rsi(data['Close'], period=14)
 
-    # combined chart add
     combined_fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name=f"{t}"))
 
-    # show metrics
     last_price = float(data['Close'].iloc[-1])
     delta_pct = 0.0
     if len(data['Close']) >= 2:
@@ -240,7 +224,6 @@ for t in tickers:
             delta_pct = 0.0
     st.metric(label="آخرین قیمت (USD)", value=f"${last_price:,.4f}", delta=f"{delta_pct:.2f}%")
 
-    # small chart for this ticker
     fig_mini = go.Figure()
     fig_mini.add_trace(go.Scatter(x=data.index, y=data['Close'], name='Close'))
     fig_mini.add_trace(go.Scatter(x=data.index, y=data['MA20'], name='MA20'))
@@ -251,7 +234,6 @@ for t in tickers:
     st.subheader("📋 Recent data & indicators")
     st.dataframe(data.tail(8))
 
-    # simple rule signal
     signal = "🟡 Hold"
     try:
         if data['RSI14'].iloc[-1] < 30 and data['MA20'].iloc[-1] > data['MA50'].iloc[-1]:
@@ -267,7 +249,6 @@ for t in tickers:
 
     st.markdown(f"### Signal: {signal}")
 
-    # Prophet forecast block
     forecast = None
     if enable_prophet:
         st.subheader(f"🔮 Prophet forecast for {t} ({forecast_days} days)")
@@ -289,13 +270,11 @@ for t in tickers:
 
     results[t] = {'data': data, 'forecast': forecast}
 
-# After loop - combined chart
 st.markdown("---")
 st.header("📊 Combined chart")
 combined_fig.update_layout(title="Combined Close Series", xaxis_rangeslider_visible=True, height=450)
 st.plotly_chart(combined_fig, use_container_width=True)
 
-# Summary download
 if results:
     rows = []
     for k,v in results.items():
@@ -306,18 +285,17 @@ if results:
     if not combined_df.empty:
         st.download_button("Download summary (last rows) CSV", combined_df.to_csv(index=False).encode('utf-8'), file_name="summary_last_rows.csv", mime='text/csv')
 
-# News section (local sample)
+# News section
 if show_news:
     st.markdown("---")
-    st.header("📰 News (sample)")
-    news_path = os.path.join("data","sample_news.csv")
-    if os.path.exists(news_path):
-        try:
-            news_df = pd.read_csv(news_path)
-            st.dataframe(news_df.head(10))
-        except Exception:
-            st.info("News file exists but couldn't be read.")
+    st.header("📰 News")
+    # fetch_news will try NewsAPI if settings exist, else fallback to local sample CSV
+    news_items = fetch_news(limit=10)
+    if news_items is None or len(news_items) == 0:
+        st.info("No news found (no local file or API not configured). Place data/sample_news.csv or provide API key in config/settings.json.")
     else:
-        st.info("No local news file found. You can place sample_news.csv in data/ folder.")
+        # news_items expected as list of dicts with keys: date, title, source, url
+        news_df = pd.DataFrame(news_items)
+        st.dataframe(news_df)
 
-st.caption("Made with ❤️ — CryptoForecast. Not financial advice. Use carefully.")
+st.caption("Made with ❤️ — CryptoForecast. Not financial advice.")
