@@ -2,58 +2,87 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from prophet import Prophet
-import matplotlib.pyplot as plt
+from prophet.plot import plot_plotly
+from datetime import date
 
-st.set_page_config(page_title="Crypto Forecast", layout="wide")
-st.title("💹 داشبورد پیش‌بینی ارز دیجیتال")
+# -----------------------------
+# تنظیمات اولیه
+# -----------------------------
+START = "2018-01-01"
+TODAY = date.today().strftime("%Y-%m-%d")
 
-# انتخاب ارز
-cryptos = {
-    "Bitcoin": "BTC-USD",
-    "Cardano": "ADA-USD",
-    "Stellar": "XLM-USD",
-    "Ethereum": "ETH-USD",
-    "Litecoin": "LTC-USD"
-}
-crypto_name = st.selectbox("ارز را انتخاب کنید:", list(cryptos.keys()))
-symbol = cryptos[crypto_name]
+st.title("📈 پیش‌بینی قیمت ارز دیجیتال با Prophet")
 
-# انتخاب بازه زمانی
-period = st.selectbox("بازه زمانی داده‌ها:", ["1y", "2y", "5y", "max"], index=0)
+# -----------------------------
+# انتخاب ارز دیجیتال
+# -----------------------------
+cryptos = ("BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD")
+selected_crypto = st.selectbox("ارز دیجیتال را انتخاب کنید:", cryptos)
 
-# دانلود داده
-st.info("📥 در حال دریافت داده‌ها...")
-df = yf.download(symbol, period=period)
-df.reset_index(inplace=True)
+# -----------------------------
+# انتخاب مدت پیش‌بینی
+# -----------------------------
+n_years = st.slider("مدت پیش‌بینی (سال)", 1, 4)
+period = n_years * 365
 
-if df.empty:
-    st.error("❌ داده‌ای برای این ارز پیدا نشد.")
+# -----------------------------
+# دریافت داده‌ها
+# -----------------------------
+@st.cache_data
+def load_data(ticker):
+    data = yf.download(ticker, START, TODAY)
+    data.reset_index(inplace=True)
+    return data
+
+data_load_state = st.text("در حال دریافت داده‌ها...")
+data = load_data(selected_crypto)
+data_load_state.text("✅ داده‌ها با موفقیت بارگذاری شدند!")
+
+st.subheader("نمایش داده‌ها")
+st.write(data.tail())
+
+# -----------------------------
+# پیش‌پردازش برای Prophet
+# -----------------------------
+df_train = data[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
+
+# چک کردن ستون y
+if 'y' in df_train.columns:
+    if isinstance(df_train['y'], (pd.Series, list)):
+        df_train['y'] = pd.to_numeric(df_train['y'], errors='coerce')
+        df_train = df_train.dropna(subset=['y'])
+    else:
+        st.error("❌ ستون y فرمت درستی ندارد.")
+        st.stop()
+else:
+    st.error("❌ ستون y پیدا نشد.")
     st.stop()
 
-# نمایش داده
-st.subheader("📊 داده‌های قیمتی")
-st.dataframe(df.tail())
+if df_train.empty:
+    st.error("❌ داده‌ای برای آموزش Prophet پیدا نشد.")
+    st.stop()
 
-# Prophet Model
-st.subheader("🔮 پیش‌بینی با Prophet")
-df_train = df[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+# -----------------------------
+# مدل Prophet
+# -----------------------------
+m = Prophet()
+m.fit(df_train)
 
-if 'y' in df_train.columns and not df_train.empty:
-    df_train['y'] = pd.to_numeric(df_train['y'], errors='coerce')
-    df_train = df_train.dropna(subset=['y'])
+# -----------------------------
+# پیش‌بینی آینده
+# -----------------------------
+future = m.make_future_dataframe(periods=period)
+forecast = m.predict(future)
 
-    if df_train.empty:
-        st.error("❌ داده‌ای برای آموزش Prophet پیدا نشد. لطفاً بازه یا ارز را تغییر دهید.")
-    else:
-        m = Prophet()
-        m.fit(df_train)
-        future = m.make_future_dataframe(periods=30)
-        forecast = m.predict(future)
+# -----------------------------
+# نمایش نتایج
+# -----------------------------
+st.subheader("پیش‌بینی قیمت")
+st.write(forecast.tail())
 
-        fig1 = m.plot(forecast)
-        st.pyplot(fig1)
+fig1 = plot_plotly(m, forecast)
+st.plotly_chart(fig1)
 
-        st.subheader("📅 پیش‌بینی ۳۰ روز آینده")
-        st.dataframe(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(30))
-else:
-    st.error("❌ داده یا ستون y وجود ندارد.")
+st.subheader("ترکیب اجزای پیش‌بینی")
+fig2 = m.plot_components(forecast)
+st.write(fig2)
