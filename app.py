@@ -1,56 +1,84 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 from prophet import Prophet
-import plotly.express as px
-import os
+from prophet.plot import plot_plotly
+import plotly.graph_objs as go
+from datetime import date
 
-# عنوان برنامه
-st.title("📈 پیش‌بینی قیمت ارز دیجیتال با Prophet")
+# 📌 تنظیمات اولیه صفحه
+st.set_page_config(page_title="Crypto Forecast", layout="wide")
+st.title("📈 پیش‌بینی قیمت ارز دیجیتال")
 
-# مسیر فایل نمونه دیتا
-sample_path = os.path.join("data", "sample.csv")
+START = "2018-01-01"
+TODAY = date.today().strftime("%Y-%m-%d")
 
-# بارگذاری دیتا
-uploaded_file = st.file_uploader("یک فایل CSV آپلود کنید یا از نمونه استفاده کنید", type=["csv"])
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-else:
-    df = pd.read_csv(sample_path)
-    st.info("⚠️ از داده نمونه استفاده شد.")
+# 📌 انتخاب ارز دیجیتال
+coins = ("BTC-USD", "ADA-USD", "XLM-USD", "ETH-USD")
+selected_coin = st.selectbox("یک ارز انتخاب کنید:", coins)
 
-# بررسی ستون‌ها
-st.subheader("دیتای ورودی")
-st.write(df.head())
+# 📌 انتخاب تایم‌فریم
+interval = st.selectbox("تایم‌فریم داده‌ها:", ("1d", "1wk", "1mo"))
 
-if 'ds' not in df.columns or 'y' not in df.columns:
-    st.error("فایل باید شامل دو ستون `ds` (تاریخ) و `y` (قیمت) باشد.")
-    st.stop()
+# 📌 انتخاب تعداد روز پیش‌بینی
+n_days = st.slider("تعداد روزهای پیش‌بینی:", 1, 365)
+period = n_days
 
-# تبدیل تاریخ
-df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
+# 📌 بارگذاری داده‌ها با کش
+@st.cache_data
+def load_data(ticker, interval):
+    data = yf.download(ticker, START, TODAY, interval=interval)
+    data.reset_index(inplace=True)
+    return data
 
-# اطمینان از عددی بودن y
-if not pd.api.types.is_numeric_dtype(df['y']):
-    try:
-        df['y'] = pd.to_numeric(df['y'], errors='coerce')
-    except Exception as e:
-        st.error(f"❌ خطا در تبدیل ستون y به عدد: {e}")
-        st.stop()
+# 🚀 بارگذاری دیتا
+data_load_state = st.text("در حال بارگذاری داده‌ها...")
+df = load_data(selected_coin, interval)
+data_load_state.text("✅ داده‌ها بارگذاری شدند!")
 
-# حذف ردیف‌های خالی
-df = df.dropna(subset=['ds', 'y'])
+# 📌 نمایش داده‌های خام
+st.subheader("📊 داده‌های خام")
+st.dataframe(df.tail())
 
-# آموزش مدل Prophet
-model = Prophet()
-model.fit(df)
+# 📌 نمودار قیمت و حجم معاملات
+fig_price = go.Figure()
+fig_price.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="قیمت بسته شدن"))
+fig_price.update_layout(title="نمودار قیمت", xaxis_rangeslider_visible=True)
+st.plotly_chart(fig_price)
 
-# پیش‌بینی ۳۰ روز آینده
-future = model.make_future_dataframe(periods=30)
-forecast = model.predict(future)
+fig_vol = go.Figure()
+fig_vol.add_trace(go.Bar(x=df['Date'], y=df['Volume'], name="حجم معاملات"))
+fig_vol.update_layout(title="نمودار حجم معاملات")
+st.plotly_chart(fig_vol)
 
-# نمایش نتیجه
-fig1 = px.line(forecast, x='ds', y='yhat', title="📊 پیش‌بینی قیمت")
-st.plotly_chart(fig1)
+# 📌 آماده‌سازی دیتا برای Prophet
+df_train = df[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
+df_train['y'] = pd.to_numeric(df_train['y'], errors='coerce')
 
-st.subheader("نمونه داده پیش‌بینی")
-st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
+# 📌 مدل Prophet
+m = Prophet()
+m.fit(df_train)
+
+# 📌 ایجاد پیش‌بینی
+future = m.make_future_dataframe(periods=period)
+forecast = m.predict(future)
+
+# 📌 نمایش پیش‌بینی
+st.subheader("📈 پیش‌بینی قیمت آینده")
+fig_forecast = plot_plotly(m, forecast)
+st.plotly_chart(fig_forecast)
+
+# 📌 نمایش جزئیات پیش‌بینی
+st.subheader("🔍 داده‌های پیش‌بینی")
+st.dataframe(forecast.tail())
+
+# 📌 دکمه دانلود CSV پیش‌بینی
+csv = forecast.to_csv(index=False).encode('utf-8')
+st.download_button(
+    label="📥 دانلود پیش‌بینی به صورت CSV",
+    data=csv,
+    file_name=f"{selected_coin}_forecast.csv",
+    mime="text/csv",
+)
+
+st.success("برنامه با موفقیت اجرا شد 🚀")
