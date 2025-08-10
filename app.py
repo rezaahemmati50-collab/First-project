@@ -1,79 +1,56 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 from prophet import Prophet
-from prophet.plot import plot_plotly
-from plotly import graph_objs as go
+import plotly.express as px
+import os
 
-st.set_page_config(page_title="Crypto Price Prediction", layout="wide")
-st.title("📈 Cryptocurrency Price Prediction App")
+# عنوان برنامه
+st.title("📈 پیش‌بینی قیمت ارز دیجیتال با Prophet")
 
-# Sidebar inputs
-st.sidebar.header("Settings")
-ticker = st.sidebar.text_input("Enter cryptocurrency ticker (e.g., BTC-USD):", "BTC-USD")
-n_years = st.sidebar.slider("Years of prediction:", 1, 4)
-period = n_years * 365
+# مسیر فایل نمونه دیتا
+sample_path = os.path.join("data", "sample.csv")
 
-# Load data
-@st.cache_data
-def load_data(ticker):
+# بارگذاری دیتا
+uploaded_file = st.file_uploader("یک فایل CSV آپلود کنید یا از نمونه استفاده کنید", type=["csv"])
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+else:
+    df = pd.read_csv(sample_path)
+    st.info("⚠️ از داده نمونه استفاده شد.")
+
+# بررسی ستون‌ها
+st.subheader("دیتای ورودی")
+st.write(df.head())
+
+if 'ds' not in df.columns or 'y' not in df.columns:
+    st.error("فایل باید شامل دو ستون `ds` (تاریخ) و `y` (قیمت) باشد.")
+    st.stop()
+
+# تبدیل تاریخ
+df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
+
+# اطمینان از عددی بودن y
+if not pd.api.types.is_numeric_dtype(df['y']):
     try:
-        data = yf.download(ticker)
-        data.reset_index(inplace=True)
-        return data
+        df['y'] = pd.to_numeric(df['y'], errors='coerce')
     except Exception as e:
-        st.error(f"❌ Failed to load data: {e}")
-        return pd.DataFrame()
+        st.error(f"❌ خطا در تبدیل ستون y به عدد: {e}")
+        st.stop()
 
-df = load_data(ticker)
+# حذف ردیف‌های خالی
+df = df.dropna(subset=['ds', 'y'])
 
-# Check if data exists
-if df.empty or 'Close' not in df.columns:
-    st.error("❌ No data found for the given ticker. Please try another one.")
-    st.stop()
+# آموزش مدل Prophet
+model = Prophet()
+model.fit(df)
 
-# Show raw data
-st.subheader('Raw Data')
-st.write(df.tail())
+# پیش‌بینی ۳۰ روز آینده
+future = model.make_future_dataframe(periods=30)
+forecast = model.predict(future)
 
-# Plot raw data
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name='Close Price'))
-fig.layout.update(title_text="Time Series Data", xaxis_rangeslider_visible=True)
-st.plotly_chart(fig)
-
-# Prepare data for Prophet
-df_train = df[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
-
-# Ensure numeric values for y
-if not pd.api.types.is_numeric_dtype(df_train['y']):
-    df_train['y'] = pd.to_numeric(df_train['y'], errors='coerce')
-
-df_train = df_train.dropna()
-
-# Stop if no valid data
-if df_train.empty:
-    st.error("❌ No valid numeric 'Close' price data available for forecasting.")
-    st.stop()
-
-# Train Prophet model
-m = Prophet()
-m.fit(df_train)
-
-# Future dataframe
-future = m.make_future_dataframe(periods=period)
-forecast = m.predict(future)
-
-# Show forecast
-st.subheader('Forecast Data')
-st.write(forecast.tail())
-
-# Plot forecast
-st.subheader('Forecast Plot')
-fig1 = plot_plotly(m, forecast)
+# نمایش نتیجه
+fig1 = px.line(forecast, x='ds', y='yhat', title="📊 پیش‌بینی قیمت")
 st.plotly_chart(fig1)
 
-# Forecast components
-st.subheader("Forecast Components")
-fig2 = m.plot_components(forecast)
-st.write(fig2)
+st.subheader("نمونه داده پیش‌بینی")
+st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
