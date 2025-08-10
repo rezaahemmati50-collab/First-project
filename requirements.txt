@@ -1,10 +1,6 @@
 streamlit
 yfinance
-pandas
-numpy
+prophet
 plotly
-requests
-scikit-learn
-# optional:
-# prophet
-# ta
+feedparser
+pandas
