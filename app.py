@@ -1,74 +1,58 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 from prophet import Prophet
-from prophet.plot import plot_plotly
-from plotly import graph_objs as go
-from datetime import date
+import yfinance as yf
 
-# عنوان برنامه
 st.title("📈 پیش‌بینی قیمت ارز دیجیتال")
 
 # انتخاب ارز
-cryptos = ["BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD"]
-selected_crypto = st.selectbox("انتخاب ارز دیجیتال:", cryptos)
+symbol = st.text_input("نماد ارز دیجیتال را وارد کنید (مثلاً BTC-USD):", "BTC-USD")
 
-# انتخاب تعداد روزهای پیش‌بینی
-n_days = st.slider("تعداد روزهای پیش‌بینی", 1, 365, 30)
+# دریافت داده
+if st.button("📥 دریافت و پیش‌بینی"):
+    try:
+        df = yf.download(symbol, period="1y")
 
-# محدوده تاریخی
-START = "2020-01-01"
-TODAY = date.today().strftime("%Y-%m-%d")
+        if df.empty:
+            st.error("❌ داده‌ای برای این نماد پیدا نشد.")
+            st.stop()
 
-# بارگذاری داده
-@st.cache_data
-def load_data(ticker):
-    data = yf.download(ticker, START, TODAY)
-    data.reset_index(inplace=True)
-    return data
+        # بررسی وجود ستون Close
+        if 'Close' not in df.columns:
+            st.error("❌ ستون Close در داده‌ها پیدا نشد.")
+            st.stop()
 
-st.subheader("📥 در حال دریافت داده‌ها...")
-df = load_data(selected_crypto)
+        close_col = df['Close']
 
-# بررسی ستون‌ها
-if 'Close' not in df.columns:
-    st.error("❌ ستون Close در داده‌ها یافت نشد. لطفاً ارز یا تایم‌فریم دیگری انتخاب کنید.")
-    st.stop()
+        # بررسی نوع داده
+        if not isinstance(close_col, (pd.Series, list, tuple)):
+            st.error("❌ ستون Close فرمت نامناسب دارد.")
+            st.stop()
 
-if df['Close'].empty:
-    st.error("❌ ستون Close خالی است. داده‌ای برای پردازش وجود ندارد.")
-    st.stop()
+        # بررسی خالی بودن
+        if pd.Series(close_col).empty:
+            st.error("❌ ستون Close خالی است.")
+            st.stop()
 
-# آماده‌سازی داده برای Prophet
-y_values = pd.to_numeric(df['Close'], errors='coerce')
+        # آماده‌سازی داده برای Prophet
+        df_train = pd.DataFrame({
+            "ds": df.index,
+            "y": pd.to_numeric(close_col, errors='coerce')
+        }).dropna()
 
-if y_values.isna().all():
-    st.error("❌ همه مقادیر ستون Close نامعتبر هستند.")
-    st.stop()
+        if df_train.empty:
+            st.error("❌ داده مناسب برای پیش‌بینی وجود ندارد.")
+            st.stop()
 
-df_train = pd.DataFrame({
-    "ds": pd.to_datetime(df['Date'], errors='coerce'),
-    "y": y_values
-}).dropna()
+        # مدل Prophet
+        model = Prophet()
+        model.fit(df_train)
 
-# رسم نمودار اولیه
-st.subheader("📊 نمودار قیمت")
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="قیمت بسته شدن"))
-fig.layout.update(xaxis_rangeslider_visible=True)
-st.plotly_chart(fig)
+        future = model.make_future_dataframe(periods=30)
+        forecast = model.predict(future)
 
-# مدل Prophet
-model = Prophet()
-model.fit(df_train)
+        st.subheader("📊 نمودار پیش‌بینی")
+        st.line_chart(forecast.set_index('ds')[['yhat', 'yhat_lower', 'yhat_upper']])
 
-future = model.make_future_dataframe(periods=n_days)
-forecast = model.predict(future)
-
-# نمایش پیش‌بینی
-st.subheader("🔮 پیش‌بینی قیمت")
-fig_forecast = plot_plotly(model, forecast)
-st.plotly_chart(fig_forecast)
-
-st.write("📅 داده‌های پیش‌بینی شده:")
-st.dataframe(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']])
+    except Exception as e:
+        st.error(f"🚨 خطا در پردازش داده: {e}")
