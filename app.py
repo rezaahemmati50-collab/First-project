@@ -26,26 +26,35 @@ data["MA20"] = data["Close"].rolling(window=20).mean()
 data["MA50"] = data["Close"].rolling(window=50).mean()
 
 # 🔍 بررسی آخرین قیمت و سیگنال
-latest_price = float(data["Close"].dropna().iloc[-1])
-ma20 = float(data["MA20"].dropna().iloc[-1])
-ma50 = float(data["MA50"].dropna().iloc[-1])
+latest_price = float(data["Close"].iloc[-1])
+ma20_ready = not pd.isna(data["MA20"].iloc[-1])
+ma50_ready = not pd.isna(data["MA50"].iloc[-1])
 
-if latest_price > ma20 > ma50:
-    signal = "📈 خرید"
-    color = "green"
-elif latest_price < ma20 < ma50:
-    signal = "📉 فروش"
-    color = "red"
+if ma50_ready:
+    ma20 = float(data["MA20"].iloc[-1])
+    ma50 = float(data["MA50"].iloc[-1])
+    if latest_price > ma20 > ma50:
+        signal, color = "📈 خرید", "green"
+    elif latest_price < ma20 < ma50:
+        signal, color = "📉 فروش", "red"
+    else:
+        signal, color = "⏳ نگه‌داری", "orange"
+elif ma20_ready:
+    ma20 = float(data["MA20"].iloc[-1])
+    if latest_price > ma20:
+        signal, color = "📈 خرید (بر اساس MA20)", "green"
+    elif latest_price < ma20:
+        signal, color = "📉 فروش (بر اساس MA20)", "red"
+    else:
+        signal, color = "⏳ نگه‌داری (بر اساس MA20)", "orange"
 else:
-    signal = "⏳ نگه‌داری"
-    color = "orange"
+    signal, color = "⚠️ داده کافی برای محاسبه میانگین‌ها وجود ندارد", "gray"
 
-# 📢 نمایش سیگنال رنگی
+# 📢 نمایش سیگنال
 st.markdown(f"<h2 style='color:{color}'>سیگنال برای {crypto_name}: {signal}</h2>", unsafe_allow_html=True)
 
 # 📊 نمودار کندل استیک + MA
 fig = go.Figure()
-
 fig.add_trace(go.Candlestick(
     x=data.index,
     open=data['Open'],
