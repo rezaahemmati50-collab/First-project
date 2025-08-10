@@ -1,80 +1,53 @@
-import yfinance as yf
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import yfinance as yf
 from prophet import Prophet
 from prophet.plot import plot_plotly
-import plotly.graph_objects as go
-from datetime import datetime
+from plotly import graph_objs as go
 
-st.set_page_config(page_title="Crypto & Stock Prediction Dashboard", layout="wide")
-st.title("📊 Crypto & Stock Multi-Prediction Dashboard")
+st.title("📈 پیش‌بینی قیمت ارز دیجیتال / سهام")
 
-# --- 1. ورودی‌ها
-tickers = st.text_input("Enter tickers (comma separated)", "BTC-USD, ETH-USD, AAPL")
-period = st.selectbox("Select historical period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
-days_ahead = st.slider("Days to forecast", min_value=7, max_value=90, value=30)
-refresh_data = st.checkbox("🔄 Auto-refresh every 1 minute", value=False)
+# ورودی تیکرها
+tickers = st.text_input("🔍 نماد یا نمادها را وارد کنید (با کاما جدا کنید)", "BTC-USD")
 
-if refresh_data:
-    st.experimental_rerun()
+period = st.slider("مدت پیش‌بینی (سال)", 1, 4, 1)
 
-# --- 2. رسم نمودار ترکیبی قیمت‌ها
-if tickers:
-    tickers_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-    combined_fig = go.Figure()
+if st.button("📊 پیش‌بینی کن"):
+    tickers_list = [t.strip() for t in tickers.split(",")]
 
     for ticker in tickers_list:
+        st.subheader(f"🔹 {ticker}")
+
         try:
-            df = yf.download(ticker, period=period, interval="1d")
-
-            if 'Close' not in df.columns or df.empty:
-                st.warning(f"⚠️ No valid 'Close' price found for {ticker}. Skipping...")
-                continue
-
-            df = df.reset_index()
-            df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-            df = df.dropna(subset=['Close'])
-
-            combined_fig.add_trace(go.Scatter(
-                x=df['Date'], y=df['Close'], mode='lines', name=ticker
-            ))
-
-        except Exception as e:
-            st.error(f"❌ Error fetching data for {ticker}: {e}")
-
-    st.subheader("📉 Combined Price Chart")
-    combined_fig.update_layout(title="Historical Prices", xaxis_title="Date", yaxis_title="Price")
-    st.plotly_chart(combined_fig, use_container_width=True)
-
-# --- 3. پیش‌بینی جداگانه برای هر ارز/سهام
-    for ticker in tickers_list:
-        try:
-            df = yf.download(ticker, period=period, interval="1d")
-
-            if 'Close' not in df.columns or df.empty:
-                st.warning(f"⚠️ No prediction: No 'Close' price for {ticker}.")
-                continue
-
-            df = df.reset_index()
-            df = df.rename(columns={"Date": "ds", "Close": "y"})
-            df['y'] = pd.to_numeric(df['y'], errors='coerce')
-            df = df.dropna()
-
+            # دانلود دیتا فقط برای همین تیکر
+            df = yf.download(ticker, period="5y")
             if df.empty:
-                st.warning(f"⚠️ Skipping {ticker} due to missing data.")
+                st.error(f"❌ داده‌ای برای {ticker} پیدا نشد.")
                 continue
 
-            m = Prophet(daily_seasonality=True)
-            m.fit(df)
+            # انتخاب ستون Close به صورت Series
+            close_prices = df["Close"]
+            close_prices = pd.to_numeric(close_prices, errors="coerce")
 
-            future = m.make_future_dataframe(periods=days_ahead)
+            # آماده‌سازی دیتا برای Prophet
+            df_train = pd.DataFrame({
+                "ds": close_prices.index,
+                "y": close_prices.values
+            }).dropna()
+
+            # مدل Prophet
+            m = Prophet()
+            m.fit(df_train)
+
+            future = m.make_future_dataframe(periods=period * 365)
             forecast = m.predict(future)
 
-            st.subheader(f"🔮 Prediction for {ticker}")
-            fig = plot_plotly(m, forecast)
-            st.plotly_chart(fig, use_container_width=True)
+            # نمودار
+            fig1 = plot_plotly(m, forecast)
+            st.plotly_chart(fig1)
+
+            # داده‌های پیش‌بینی
+            st.write(forecast.tail())
 
         except Exception as e:
-            st.error(f"❌ Error in prediction for {ticker}: {e}")
-
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            st.error(f"⚠️ خطا در پردازش {ticker}: {e}")
