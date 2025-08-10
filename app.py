@@ -2,87 +2,62 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 from prophet import Prophet
+from datetime import date
 
-# عنوان برنامه
-st.set_page_config(page_title="تحلیل و پیش‌بینی ارز دیجیتال", layout="wide")
+st.set_page_config(page_title="تحلیل ارز دیجیتال", layout="wide")
+
 st.title("📈 داشبورد تحلیل و پیش‌بینی ارز دیجیتال")
 
-# انتخاب ارز و بازه زمانی
-col1, col2 = st.columns(2)
-with col1:
-    ticker = st.selectbox("انتخاب ارز دیجیتال:", ["BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD"])
-with col2:
-    period = st.selectbox("بازه زمانی:", ["1d", "5d", "1wk", "2wk"], index=1)
+# انتخاب ارز
+crypto_symbol = st.selectbox(
+    "ارز مورد نظر را انتخاب کنید",
+    ["BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD"]
+)
 
-# دریافت داده‌ها
-try:
-    data = yf.download(ticker, period=period, interval="1h")
-    if data.empty:
-        st.error("داده‌ای برای این بازه زمانی یافت نشد.")
-        st.stop()
-except Exception as e:
-    st.error(f"خطا در دریافت داده: {e}")
-    st.stop()
+# انتخاب بازه زمانی
+period_map = {
+    "1 روز": "1d",
+    "5 روز": "5d",
+    "1 هفته": "1wk",
+    "2 هفته": "2wk",
+}
+period_choice = st.selectbox("بازه زمانی", list(period_map.keys()))
+period = period_map[period_choice]
 
-# محاسبه میانگین‌های متحرک
-data["MA20"] = data["Close"].rolling(window=20).mean()
-data["MA50"] = data["Close"].rolling(window=50).mean()
+# دانلود داده
+data = yf.download(crypto_symbol, period=period, interval="1h" if period in ["1d", "5d"] else "1d")
 
-# نمایش آخرین قیمت
-latest_price = float(data["Close"].dropna().iloc[-1])
-st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
-
-# تعیین سیگنال خرید/فروش
-if len(data.dropna()) >= 50:
-    ma20 = float(data["MA20"].dropna().iloc[-1])
-    ma50 = float(data["MA50"].dropna().iloc[-1])
-    if latest_price > ma20 > ma50:
-        signal = "📈 خرید"
-    elif latest_price < ma20 < ma50:
-        signal = "📉 فروش"
-    else:
-        signal = "🤝 نگهداری"
-    st.subheader(f"سیگنال معاملاتی: {signal}")
+if data.empty:
+    st.error("داده‌ای برای این بازه زمانی موجود نیست.")
 else:
-    st.warning("داده کافی برای محاسبه سیگنال وجود ندارد.")
+    # محاسبه میانگین متحرک
+    if len(data) >= 20:
+        data["MA20"] = data["Close"].rolling(window=20).mean()
+    if len(data) >= 50:
+        data["MA50"] = data["Close"].rolling(window=50).mean()
 
-# رسم نمودار قیمت و MA
-st.line_chart(data[["Close", "MA20", "MA50"]])
+    # آخرین قیمت
+    latest_price = data["Close"].iloc[-1]
+    st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
 
-# پیش‌بینی با Prophet
-df = data.reset_index()[["Date", "Close"]]
-df.rename(columns={"Date": "ds", "Close": "y"}, inplace=True)
+    # 📊 نمایش نمودار با ستون‌های موجود
+    available_cols = [col for col in ["Close", "MA20", "MA50"] if col in data.columns]
+    if available_cols:
+        st.line_chart(data[available_cols])
+    else:
+        st.warning("داده کافی برای نمایش نمودار وجود ندارد.")
 
-pred_3d, pred_7d = None, None
+    # 📅 پیش‌بینی قیمت با Prophet
+    st.subheader("🔮 پیش‌بینی قیمت")
+    forecast_days = st.selectbox("مدت پیش‌بینی", [3, 7])
+    df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
 
-if df["y"].dropna().shape[0] >= 2:
-    try:
-        m = Prophet()
+    if len(df.dropna()) >= 2:
+        m = Prophet(daily_seasonality=True)
         m.fit(df)
-
-        future = m.make_future_dataframe(periods=7)
+        future = m.make_future_dataframe(periods=forecast_days)
         forecast = m.predict(future)
 
-        if len(forecast) >= 4:
-            pred_3d = forecast["yhat"].iloc[-7 + 3]
-        if len(forecast) >= 7:
-            pred_7d = forecast["yhat"].iloc[-1]
-
-        # نمایش پیش‌بینی‌ها
-        col3, col4 = st.columns(2)
-        with col3:
-            if pred_3d:
-                st.metric("پیش‌بینی ۳ روز بعد", f"${pred_3d:,.2f}")
-        with col4:
-            if pred_7d:
-                st.metric("پیش‌بینی ۷ روز بعد", f"${pred_7d:,.2f}")
-
-        # رسم نمودار پیش‌بینی
-        st.subheader("📊 نمودار پیش‌بینی قیمت")
-        fig_forecast = m.plot(forecast)
-        st.pyplot(fig_forecast)
-
-    except Exception as e:
-        st.error(f"خطا در پیش‌بینی: {e}")
-else:
-    st.warning("داده کافی برای پیش‌بینی وجود ندارد.")
+        st.line_chart(forecast.set_index("ds")[["yhat", "yhat_lower", "yhat_upper"]])
+    else:
+        st.warning("داده کافی برای پیش‌بینی موجود نیست.")
