@@ -1,6 +1,4 @@
 streamlit
 yfinance
+plotly
 pandas
-ta
-numpy
-prophet
