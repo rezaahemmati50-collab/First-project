@@ -1,27 +1,22 @@
 # news/news_utils.py
 import os
-import csv
+import json
 import requests
 import pandas as pd
-import json
 
-# Try to read config/settings.json for API key
 def _load_config():
-    cfg_path = os.path.join("config", "settings.json")
-    sample_path = os.path.join("config", "settings.example.json")
     cfg = {}
-    if os.path.exists(cfg_path):
-        try:
+    cfg_path = os.path.join("config", "settings.json")
+    example_path = os.path.join("config", "settings.example.json")
+    try:
+        if os.path.exists(cfg_path):
             with open(cfg_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
-        except Exception:
-            cfg = {}
-    elif os.path.exists(sample_path):
-        try:
-            with open(sample_path, "r", encoding="utf-8") as f:
+        elif os.path.exists(example_path):
+            with open(example_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
-        except Exception:
-            cfg = {}
+    except Exception:
+        cfg = {}
     return cfg
 
 def get_news_from_csv(path, limit=10):
@@ -29,24 +24,23 @@ def get_news_from_csv(path, limit=10):
         return []
     try:
         df = pd.read_csv(path)
-        # normalize columns
-        cols = [c.strip().lower() for c in df.columns]
-        # expect columns: date,title,source,url
+        # map columns to expected keys
         rows = []
-        for idx, r in df.iterrows():
-            title = r.get('title') if 'title' in r else (r.get('Title') if 'Title' in r else None)
-            date = r.get('date') if 'date' in r else None
-            source = r.get('source') if 'source' in r else None
-            url = r.get('url') if 'url' in r else None
-            rows.append({'date': date, 'title': title, 'source': source, 'url': url})
+        for _, r in df.iterrows():
+            rows.append({
+                "date": r.get('date') if 'date' in r else r.get('Date'),
+                "title": r.get('title') if 'title' in r else r.get('Title'),
+                "source": r.get('source') if 'source' in r else r.get('Source'),
+                "url": r.get('url') if 'url' in r else r.get('URL')
+            })
         return rows[:limit]
     except Exception:
         return []
 
-def get_news_from_newsapi(api_key, q="crypto OR bitcoin OR ethereum", page_size=10):
+def get_news_from_newsapi(api_key, query="crypto OR bitcoin OR ethereum", page_size=10):
     url = "https://newsapi.org/v2/everything"
     params = {
-        "q": q,
+        "q": query,
         "pageSize": page_size,
         "language": "en",
         "sortBy": "publishedAt",
@@ -56,9 +50,9 @@ def get_news_from_newsapi(api_key, q="crypto OR bitcoin OR ethereum", page_size=
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
             return []
-        j = resp.json()
+        data = resp.json()
         items = []
-        for art in j.get("articles", []):
+        for art in data.get("articles", []):
             items.append({
                 "date": art.get("publishedAt"),
                 "title": art.get("title"),
