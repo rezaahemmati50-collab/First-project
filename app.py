@@ -4,7 +4,6 @@ import yfinance as yf
 from prophet import Prophet
 
 st.set_page_config(page_title="تحلیل ارز دیجیتال", layout="wide")
-
 st.title("📊 داشبورد تحلیل ارز دیجیتال")
 
 # انتخاب ارز و بازه
@@ -21,12 +20,13 @@ else:
     data["MA20"] = data["Close"].rolling(window=20).mean()
     data["MA50"] = data["Close"].rolling(window=50).mean()
 
-    # آخرین قیمت
-    latest_price = data["Close"].dropna().iloc[-1]
-    if pd.isna(latest_price):
-        st.warning("⚠️ قیمت معتبر یافت نشد.")
+    # آخرین قیمت - همیشه به float تبدیل می‌کنیم
+    latest_price_series = data["Close"].dropna()
+    if not latest_price_series.empty:
+        latest_price = float(latest_price_series.iloc[-1])
+        st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
     else:
-        st.metric(label="💰 آخرین قیمت", value=f"${float(latest_price):,.2f}")
+        st.warning("⚠️ قیمت معتبر یافت نشد.")
 
     # نمایش نمودار
     available_cols = [col for col in ["Close", "MA20", "MA50"] if col in data.columns]
