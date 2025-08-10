@@ -3,8 +3,8 @@ yfinance
 pandas
 numpy
 plotly
-scikit-learn
 requests
-# optional (for better forecasting & indicators)
-prophet
-ta
+scikit-learn
+# optional:
+# prophet
+# ta
