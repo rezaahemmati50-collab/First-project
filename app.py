@@ -1,16 +1,15 @@
-# app.py — Product-ready Crypto Forecast Dashboard (Persian UI)
+# app.py
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import io
 
-st.set_page_config(page_title="AureumAI · Final Dashboard", layout="wide")
-st.title("AureumAI · داشبورد نهایی تحلیل و پیش‌بینی کریپتو")
+st.set_page_config(page_title="Crypto Forecast + Prophet", layout="wide")
+st.title("📊 داشبورد تحلیل و پیش‌بینی کریپتو")
 
-# Try optional Prophet import (fallback to simple forecast if not available)
+# Try to import Prophet; if unavailable we'll fallback
 HAS_PROPHET = False
 try:
     from prophet import Prophet
@@ -18,71 +17,70 @@ try:
 except Exception:
     HAS_PROPHET = False
 
-# ---------------------------
-# Sidebar controls
-# ---------------------------
-st.sidebar.header("⚙️ تنظیمات")
+# ---------------- UI: controls ----------------
+col1, col2, col3 = st.columns([2,1,1])
+with col1:
+    symbol = st.selectbox("انتخاب ارز دیجیتال:", ["ETH-USD","BTC-USD","ADA-USD","SOL-USD","XRP-USD"], index=0)
+with col2:
+    period = st.selectbox("دوره داده:", ["3mo","6mo","1y","2y"], index=1)
+with col3:
+    interval = st.selectbox("فواصل زمانی:", ["1d","1wk"], index=0)
 
-ASSETS = {
-    "Bitcoin (BTC)": "BTC-USD",
-    "Ethereum (ETH)": "ETH-USD",
-    "Cardano (ADA)": "ADA-USD",
-    "Solana (SOL)": "SOL-USD",
-    "Litecoin (LTC)": "LTC-USD",
-    "Dogecoin (DOGE)": "DOGE-USD"
-}
-asset_name = st.sidebar.selectbox("انتخاب ارز", list(ASSETS.keys()), index=1)
-symbol = ASSETS[asset_name]
+st.markdown("---")
 
-period = st.sidebar.selectbox("بازهٔ تاریخی برای آموزش", ["3mo","6mo","1y","2y"], index=1)
-interval = st.sidebar.selectbox("فاصلهٔ داده", ["1d","1wk"], index=0)
+# Forecast controls
+fc_col1, fc_col2 = st.columns([2,1])
+with fc_col1:
+    forecast_days = st.slider("تعداد روزهای پیش‌بینی:", 1, 90, 14)
+with fc_col2:
+    use_log = st.checkbox("استفاده از log-transform (پیشنهادی)", value=True)
 
-forecast_days = st.sidebar.slider("تعداد روزهای پیش‌بینی", 7, 90, 30)
-model_choice = st.sidebar.selectbox("مدل پیش‌بینی (اگر Prophet نصب نیست به Moving Avg برمی‌گردد)",
-                                    [ "Auto (Prophet → MovingAvg)", "Prophet (if available)", "MovingAvg (fast)" ])
-use_log = st.sidebar.checkbox("استفاده از log-transform (پیشنهادی)", value=True)
-st.sidebar.markdown("---")
-st.sidebar.write(f"Prophet در دسترس: {'✔' if HAS_PROPHET else '✖'}")
-st.sidebar.markdown("AureumAI · Demo — این ابزار مشاور سرمایه‌گذاری نیست.")
+st.markdown(f"**Prophet در دسترس است:** {'✅' if HAS_PROPHET else '❌ (fallback → Moving Average)'}")
+st.markdown("---")
 
-# ---------------------------
-# Helper utilities
-# ---------------------------
+# ---------------- Helpers ----------------
 @st.cache_data(ttl=300)
-def fetch_data(sym, period, interval):
+def download_data(sym, period, interval):
     df = yf.download(sym, period=period, interval=interval, progress=False)
     return df
 
 def normalize_df(raw_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure df has 'Date' column and 'Close' numeric column.
+    Raises ValueError if cannot find Close.
+    """
     if raw_df is None or raw_df.empty:
         return pd.DataFrame()
     df = raw_df.copy()
-    # bring index to column if datetime index
+    # if datetime index -> reset
     if np.issubdtype(df.index.dtype, np.datetime64):
         df = df.reset_index()
-    # find date col
+    # find date column
     date_col = None
     for c in df.columns:
         if str(c).lower() in ("date","datetime","index"):
-            date_col = c; break
+            date_col = c
+            break
     if date_col is None:
         date_col = df.columns[0]
     df = df.rename(columns={date_col: "Date"})
-    # find close col
+    # find close column (case-insensitive)
     close_col = None
     for c in df.columns:
         if str(c).lower() == "close":
-            close_col = c; break
+            close_col = c
+            break
     if close_col is None:
         for c in df.columns:
             if str(c).lower() in ("adj close","adjusted close"):
-                close_col = c; break
+                close_col = c
+                break
     if close_col is None:
         numeric = df.select_dtypes(include=[np.number]).columns.tolist()
         if numeric:
             close_col = numeric[-1]
     if close_col is None:
-        raise ValueError("ستون Close یافت نشد — لطفاً CSV با ستون Date و Close آپلود کنید.")
+        raise ValueError("ستون 'Close' یافت نشد. لطفاً CSV با ستون Date و Close آپلود کنید یا نماد دیگری را انتخاب کنید.")
     df = df.rename(columns={close_col: "Close"})
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
@@ -92,148 +90,122 @@ def normalize_df(raw_df: pd.DataFrame) -> pd.DataFrame:
 def moving_avg_forecast(series: pd.Series, days: int):
     last = float(series.iloc[-1])
     avg_pct = series.pct_change().dropna().mean()
-    return [ last * ((1 + avg_pct) ** i) for i in range(1, days+1) ]
+    # if avg_pct is NaN (constant series) fallback to 0
+    if np.isnan(avg_pct):
+        avg_pct = 0.0
+    return [ last * ((1+avg_pct)**i) for i in range(1, days+1) ]
 
-def to_csv_bytes(df):
+def to_csv_bytes(df: pd.DataFrame):
     return df.to_csv(index=False).encode("utf-8")
 
-# ---------------------------
-# Load data (yfinance) or allow CSV upload
-# ---------------------------
-uploaded = st.sidebar.file_uploader("آپلود CSV (اختیاری) — ستون Date و Close", type=["csv"])
-if uploaded:
-    try:
-        raw = pd.read_csv(uploaded)
-        st.sidebar.success("CSV آپلود شد — از آن استفاده می‌کنیم.")
-    except Exception as e:
-        st.sidebar.error(f"خطا در خواندن CSV: {e}")
-        raw = pd.DataFrame()
-else:
-    with st.spinner(f"دریافت داده {symbol} ..."):
-        raw = fetch_data(symbol, period=period, interval=interval)
+# ---------------- Load data (yfinance) ----------------
+with st.spinner("در حال دریافت داده‌ها ..."):
+    raw = download_data(symbol, period, interval)
 
 if raw is None or raw.empty:
-    st.error("داده‌ای در دسترس نیست. اتصال اینترنت را بررسی کنید یا فایل CSV آپلود کنید.")
+    st.error("داده‌ای دریافت نشد — لطفاً اتصال اینترنت یا نماد/بازه را بررسی کنید.")
     st.stop()
 
-# normalize
+# normalize and validate
 try:
     df = normalize_df(raw)
 except Exception as e:
     st.error(f"Data normalization error: {e}")
     st.stop()
 
-# ---------------------------
-# Main UI: Tabs
-# ---------------------------
-st.markdown(f"### {asset_name} — `{symbol}`")
-st.markdown(f"تاریخ داده‌ها: {df['Date'].min().date()} → {df['Date'].max().date()}  •  سطرها: {len(df)}")
+# ---------------- Show last data ----------------
+st.subheader("داده‌های تاریخی (آخرین مشاهدات)")
+st.dataframe(df[["Date","Close"]].tail(10), use_container_width=True)
 
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Price", "📊 Data", "🔮 Forecast", "📉 Technical"])
+# ---------------- Historical price chart ----------------
+st.subheader("نمودار قیمت تاریخی")
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Close",
+                         line=dict(color="#00BCD4", width=2)))
+fig.update_layout(template="plotly_dark", height=420, margin=dict(t=30,b=10), xaxis_title="", yaxis_title="Price (quote)")
+st.plotly_chart(fig, use_container_width=True)
 
-# Price tab
-with tab1:
-    st.subheader("نمودار قیمت تاریخی")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Close", line=dict(color="#4CAF50")))
-    fig.update_layout(template="plotly_dark", margin=dict(t=30,b=10), height=420, xaxis_title="", yaxis_title="Price (quote)")
-    st.plotly_chart(fig, use_container_width=True)
-    st.metric("قیمت آخر (Close)", f"${df['Close'].iloc[-1]:,.2f}")
+# ---------------- Moving Average (user) ----------------
+ma_window = st.slider("پنجره میانگین متحرک (روز)", 5, 100, 20)
+df["MA"] = df["Close"].rolling(window=ma_window).mean()
 
-# Data tab
-with tab2:
-    st.subheader("دادهٔ خام (آخرین ۲۰ سطر)")
-    st.dataframe(df.tail(20), use_container_width=True)
-    st.download_button("دانلود دادهٔ خام (CSV)", to_csv_bytes(df), file_name=f"{symbol}_raw.csv")
+st.subheader(f"میانگین متحرک {ma_window}-روزه")
+fig_ma = go.Figure()
+fig_ma.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Close", line=dict(color="#BBBBBB")))
+fig_ma.add_trace(go.Scatter(x=df["Date"], y=df["MA"], mode="lines", name=f"MA{ma_window}", line=dict(color="#FFA500", width=2)))
+fig_ma.update_layout(template="plotly_dark", height=420, margin=dict(t=30,b=10))
+st.plotly_chart(fig_ma, use_container_width=True)
 
-# Forecast tab
-with tab3:
-    st.subheader("پیش‌بینی")
-    chosen = model_choice
-    if model_choice.startswith("Auto"):
-        chosen = "Prophet" if HAS_PROPHET else "MovingAvg"
-    st.info(f"مدل انتخاب‌شده: {chosen}")
+# ---------------- Forecast ----------------
+st.subheader(f"🔮 پیش‌بینی {forecast_days} روز آینده")
 
-    # prepare dataframe for prophet if used
-    forecast_df = None
-    future_dates = [ df["Date"].iloc[-1] + timedelta(days=i) for i in range(1, forecast_days+1) ]
+future_dates = [ df["Date"].iloc[-1] + timedelta(days=i) for i in range(1, forecast_days+1) ]
+forecast_vals = None
+forecast_df = None
 
+if HAS_PROPHET:
     try:
-        if chosen == "Prophet" and HAS_PROPHET:
-            p_df = df[["Date","Close"]].rename(columns={"Date":"ds","Close":"y"}).copy()
-            log_used = False
-            if use_log and (p_df["y"]>0).all():
-                p_df["y"] = np.log(p_df["y"])
-                log_used = True
-            m = Prophet(daily_seasonality=False, weekly_seasonality=True, changepoint_prior_scale=0.05)
-            m.fit(p_df.rename(columns={"y":"y"}))
-            future = m.make_future_dataframe(periods=forecast_days, freq='D')
-            pred = m.predict(future)
-            if log_used:
-                pred["yhat_final"] = np.exp(pred["yhat"])
-                pred["yhat_lower_final"] = np.exp(pred["yhat_lower"])
-                pred["yhat_upper_final"] = np.exp(pred["yhat_upper"])
-            else:
-                pred["yhat_final"] = pred["yhat"]
-                pred["yhat_lower_final"] = pred["yhat_lower"]
-                pred["yhat_upper_final"] = pred["yhat_upper"]
-            forecast_vals = pred["yhat_final"].tail(forecast_days).values
-            forecast_df = pred[["ds","yhat_final","yhat_lower_final","yhat_upper_final"]].tail(forecast_days).rename(
-                columns={"ds":"Date","yhat_final":"yhat","yhat_lower_final":"yhat_lower","yhat_upper_final":"yhat_upper"}
-            )
+        # prepare df for prophet
+        p_df = df[["Date","Close"]].rename(columns={"Date":"ds","Close":"y"}).copy()
+        log_used = False
+        if use_log and (p_df["y"]>0).all():
+            p_df["y"] = np.log(p_df["y"])
+            log_used = True
+        m = Prophet(daily_seasonality=False, weekly_seasonality=True, changepoint_prior_scale=0.05)
+        m.fit(p_df.rename(columns={"y":"y"}))
+        future = m.make_future_dataframe(periods=forecast_days, freq='D')
+        pred = m.predict(future)
+        if log_used:
+            pred["yhat_final"] = np.exp(pred["yhat"])
+            pred["yhat_lower_final"] = np.exp(pred["yhat_lower"])
+            pred["yhat_upper_final"] = np.exp(pred["yhat_upper"])
         else:
-            # Moving average fallback
-            forecast_vals = np.array(moving_avg_forecast(df["Close"], forecast_days))
-            forecast_df = pd.DataFrame({"Date":[d.date() for d in future_dates],"yhat":np.round(forecast_vals,2)})
+            pred["yhat_final"] = pred["yhat"]
+            pred["yhat_lower_final"] = pred["yhat_lower"]
+            pred["yhat_upper_final"] = pred["yhat_upper"]
+        # take last forecast_days rows
+        fvals = pred[["ds","yhat_final","yhat_lower_final","yhat_upper_final"]].tail(forecast_days).copy()
+        forecast_vals = fvals["yhat_final"].values
+        forecast_df = fvals.rename(columns={"ds":"Date","yhat_final":"yhat","yhat_lower_final":"yhat_lower","yhat_upper_final":"yhat_upper"})
+        # convert Date to date
+        forecast_df["Date"] = pd.to_datetime(forecast_df["Date"]).dt.date
     except Exception as e:
-        st.warning(f"خطا در پیش‌بینی با مدل انتخابی: {e}\nاز MovingAvg استفاده می‌شود.")
+        st.warning(f"خطا در اجرای Prophet: {e}\nاز روش میانگین متحرک استفاده می‌شود.")
         forecast_vals = np.array(moving_avg_forecast(df["Close"], forecast_days))
-        forecast_df = pd.DataFrame({"Date":[d.date() for d in future_dates],"yhat":np.round(forecast_vals,2)})
+        forecast_df = pd.DataFrame({"Date":[d.date() for d in future_dates], "yhat":np.round(forecast_vals,2)})
+else:
+    # fallback: moving average forecast
+    forecast_vals = np.array(moving_avg_forecast(df["Close"], forecast_days))
+    forecast_df = pd.DataFrame({"Date":[d.date() for d in future_dates], "yhat":np.round(forecast_vals,2)})
 
-    # show table and downloads
-    st.markdown("#### جدول پیش‌بینی")
-    st.dataframe(forecast_df.reset_index(drop=True), use_container_width=True)
-    st.download_button("دانلود پیش‌بینی (CSV)", to_csv_bytes(forecast_df), file_name=f"{symbol}_forecast.csv")
+# ensure forecast_vals is 1-d array
+forecast_vals = np.asarray(forecast_vals).reshape(-1,)
 
-    # plot forecast (actual + forecast)
-    st.markdown("#### نمودار پیش‌بینی")
-    fig_f = go.Figure()
-    fig_f.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Actual", line=dict(color="#AAAAAA")))
-    # forecast line
-    fig_f.add_trace(go.Scatter(x=future_dates, y=forecast_vals, mode="lines+markers", name="Forecast", line=dict(color="#FFA500", dash="dot")))
-    # uncertainty if available
-    if "yhat_lower" in forecast_df.columns and "yhat_upper" in forecast_df.columns:
-        fig_f.add_trace(go.Scatter(
-            x=list(pd.to_datetime(forecast_df["Date"])) + list(pd.to_datetime(forecast_df["Date"])[::-1]),
-            y=list(forecast_df["yhat_upper"]) + list(forecast_df["yhat_lower"][::-1]),
-            fill="toself", fillcolor="rgba(200,200,200,0.12)", line=dict(color="rgba(255,255,255,0)"), showlegend=False
-        ))
-    fig_f.update_layout(template="plotly_dark", height=420, margin=dict(t=20,b=10))
-    st.plotly_chart(fig_f, use_container_width=True)
+# ---------------- Forecast table & downloads ----------------
+st.markdown("### جدول پیش‌بینی")
+st.dataframe(forecast_df.reset_index(drop=True), use_container_width=True)
+st.download_button("دانلود پیش‌بینی (CSV)", to_csv_bytes(forecast_df), file_name=f"{symbol}_forecast.csv")
 
-# Technical tab
-with tab4:
-    st.subheader("Indicator: RSI & MACD (اختیاری)")
-    try:
-        import ta
-        df_t = df.copy()
-        df_t["RSI"] = ta.momentum.RSIIndicator(df_t["Close"], window=14).rsi()
-        macd = ta.trend.MACD(df_t["Close"])
-        df_t["MACD"] = macd.macd()
-        df_t["MACD_signal"] = macd.macd_signal()
+# ---------------- Forecast plot (actual + forecast + uncertainty if present) ----------------
+st.subheader("نمودار پیش‌بینی (خط پیش‌بینی و ناحیه عدم قطعیت)")
+fig_f = go.Figure()
+fig_f.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Actual", line=dict(color="#9AA0A6")))
 
-        fig_rsi = go.Figure()
-        fig_rsi.add_trace(go.Scatter(x=df_t["Date"], y=df_t["RSI"], mode="lines", name="RSI"))
-        fig_rsi.update_layout(template="plotly_dark", height=300)
-        st.plotly_chart(fig_rsi, use_container_width=True)
+# forecast line
+fig_f.add_trace(go.Scatter(x=future_dates, y=forecast_vals, mode="lines+markers", name="Forecast",
+                           line=dict(color="#FFA500", width=2, dash="dot")))
 
-        fig_macd = go.Figure()
-        fig_macd.add_trace(go.Scatter(x=df_t["Date"], y=df_t["MACD"], mode="lines", name="MACD"))
-        fig_macd.add_trace(go.Scatter(x=df_t["Date"], y=df_t["MACD_signal"], mode="lines", name="Signal"))
-        fig_macd.update_layout(template="plotly_dark", height=300)
-        st.plotly_chart(fig_macd, use_container_width=True)
-    except Exception:
-        st.info("پکیج 'ta' نصب نیست. برای تحلیل تکنیکال (RSI/MACD) آن را نصب کنید: pip install ta")
+# uncertainty band if available
+if "yhat_lower" in forecast_df.columns and "yhat_upper" in forecast_df.columns:
+    lower = forecast_df["yhat_lower"].values
+    upper = forecast_df["yhat_upper"].values
+    xs = list(pd.to_datetime(forecast_df["Date"])) + list(pd.to_datetime(forecast_df["Date"])[::-1])
+    ys = list(upper) + list(lower[::-1])
+    fig_f.add_trace(go.Scatter(x=xs, y=ys, fill="toself", fillcolor="rgba(255,165,0,0.12)",
+                               line=dict(color="rgba(255,255,255,0)"), hoverinfo="skip", showlegend=False))
+
+fig_f.update_layout(template="plotly_dark", height=460, margin=dict(t=30,b=10))
+st.plotly_chart(fig_f, use_container_width=True)
 
 st.markdown("---")
-st.caption("AureumAI · Final Demo — Not financial advice. For production, secure credentials, logging and rate limits are required.")
+st.markdown("**تذکر:** پیش‌بینی‌ها تنها بر اساس داده‌های تاریخی محاسبه می‌شوند و به هیچ وجه توصیهٔ سرمایه‌گذاری نیستند.")
