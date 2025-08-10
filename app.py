@@ -1,59 +1,50 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
+import yfinance as yf
 from prophet import Prophet
-from datetime import datetime
 
-# لیست ارزها
-coins = {
-    "BTC": "Bitcoin",
-    "ETH": "Ethereum",
-    "ADA": "Cardano",
-    "XLM": "Stellar"
-}
+st.set_page_config(page_title="تحلیل ارز دیجیتال", layout="wide")
 
-# انتخاب ارز
-symbol = st.selectbox("یک ارز دیجیتال انتخاب کنید:", list(coins.keys()))
+st.title("📊 داشبورد تحلیل ارز دیجیتال")
 
-# انتخاب بازه زمانی
-period_option = st.selectbox("بازه زمانی:", ["1d", "5d", "1wk", "2wk", "1mo", "3mo", "6mo", "1y"])
+# انتخاب ارز و بازه
+symbol = st.selectbox("ارز مورد نظر را انتخاب کنید:", ["BTC-USD", "ETH-USD", "ADA-USD", "XLM-USD"])
+period = st.selectbox("بازه زمانی:", ["1mo", "3mo", "6mo", "1y", "2y", "5y"])
 
-# تعیین interval مناسب
-if period_option in ["1d", "5d"]:
-    interval = "5m"
-else:
-    interval = "1d"
+# دریافت داده
+data = yf.download(symbol, period=period)
 
-# دانلود داده
-data = yf.download(f"{symbol}-USD", period=period_option, interval=interval)
-
-# بررسی خالی نبودن داده
 if data.empty or data["Close"].dropna().empty:
     st.warning("⚠️ هیچ داده‌ای برای این بازه یافت نشد. لطفاً بازه یا ارز دیگری انتخاب کنید.")
 else:
-    # آخرین قیمت
-    latest_price = data["Close"].dropna().iloc[-1]
-    st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
-
-    # محاسبه میانگین‌های متحرک
+    # محاسبه میانگین متحرک
     data["MA20"] = data["Close"].rolling(window=20).mean()
     data["MA50"] = data["Close"].rolling(window=50).mean()
 
-    # رسم نمودار
-    st.line_chart(data[["Close", "MA20", "MA50"]])
+    # آخرین قیمت
+    latest_price = data["Close"].dropna().iloc[-1]
+    if pd.isna(latest_price):
+        st.warning("⚠️ قیمت معتبر یافت نشد.")
+    else:
+        st.metric(label="💰 آخرین قیمت", value=f"${float(latest_price):,.2f}")
 
-    # آماده‌سازی دیتا برای Prophet
-    df = data.reset_index()[["Date", "Close"]]
+    # نمایش نمودار
+    available_cols = [col for col in ["Close", "MA20", "MA50"] if col in data.columns]
+    if available_cols:
+        st.line_chart(data[available_cols])
+    else:
+        st.warning("⚠️ ستون‌های کافی برای نمایش نمودار یافت نشد.")
+
+    # پیش‌بینی با Prophet
+    df = data.reset_index()[["Date", "Close"]].dropna()
     df.rename(columns={"Date": "ds", "Close": "y"}, inplace=True)
 
-    if len(df.dropna()) > 2:
+    if len(df) >= 2:  # Prophet حداقل 2 سطر نیاز دارد
         m = Prophet()
-        m.fit(df.dropna())
-
+        m.fit(df)
         future = m.make_future_dataframe(periods=30)
         forecast = m.predict(future)
-
-        st.subheader("پیش‌بینی ۳۰ روز آینده")
+        st.subheader("🔮 پیش‌بینی قیمت ۳۰ روز آینده")
         st.line_chart(forecast[["ds", "yhat"]].set_index("ds"))
     else:
-        st.info("📉 داده کافی برای پیش‌بینی وجود ندارد.")
+        st.warning("⚠️ داده کافی برای پیش‌بینی وجود ندارد.")
