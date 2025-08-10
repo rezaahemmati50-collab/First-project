@@ -28,11 +28,11 @@ else:
 data = yf.download(f"{symbol}-USD", period=period_option, interval=interval)
 
 # بررسی خالی نبودن داده
-if data.empty:
+if data.empty or data["Close"].dropna().empty:
     st.warning("⚠️ هیچ داده‌ای برای این بازه یافت نشد. لطفاً بازه یا ارز دیگری انتخاب کنید.")
 else:
     # آخرین قیمت
-    latest_price = data["Close"].iloc[-1]
+    latest_price = data["Close"].dropna().iloc[-1]
     st.metric(label="💰 آخرین قیمت", value=f"${latest_price:,.2f}")
 
     # محاسبه میانگین‌های متحرک
@@ -46,9 +46,9 @@ else:
     df = data.reset_index()[["Date", "Close"]]
     df.rename(columns={"Date": "ds", "Close": "y"}, inplace=True)
 
-    if len(df) > 2:
+    if len(df.dropna()) > 2:
         m = Prophet()
-        m.fit(df)
+        m.fit(df.dropna())
 
         future = m.make_future_dataframe(periods=30)
         forecast = m.predict(future)
