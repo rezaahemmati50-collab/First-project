@@ -3,54 +3,60 @@ import pandas as pd
 import yfinance as yf
 from prophet import Prophet
 from prophet.plot import plot_plotly
-from datetime import date
+from plotly import graph_objs as go
 
-# تنظیمات اولیه
-st.title("📈 پیش‌بینی قیمت ارز دیجیتال / سهام")
-st.write("این برنامه با استفاده از داده‌های Yahoo Finance و مدل Prophet قیمت آینده را پیش‌بینی می‌کند.")
+st.set_page_config(page_title="Crypto Dashboard", layout="wide")
 
-# ورودی‌ها
-ticker = st.text_input("نماد (مثال: BTC-USD یا AAPL)", value="BTC-USD")
-years = st.slider("مدت پیش‌بینی (سال)", 1, 4)
+# ----------------- عنوان
+st.title("📊 داشبورد تحلیل و پیش‌بینی ارز دیجیتال")
+
+# ----------------- ورودی‌ها
+ticker = st.text_input("نماد ارز دیجیتال (مثلاً BTC-USD)", "BTC-USD")
+years = st.slider("چند سال آینده را پیش‌بینی کنیم؟", 1, 4)
 period = years * 365
 
-# دانلود داده‌ها
+# ----------------- دانلود داده‌ها
 @st.cache_data
 def load_data(ticker):
-    try:
-        df = yf.download(ticker, period="max")
-        df.reset_index(inplace=True)
-        return df
-    except Exception as e:
-        st.error(f"خطا در دریافت داده‌ها: {e}")
-        return None
+    df = yf.download(ticker, start="2018-01-01")
+    df.reset_index(inplace=True)
+    return df
 
-if st.button("پیش‌بینی کن"):
-    df = load_data(ticker)
+data_load_state = st.text("در حال دانلود داده‌ها...")
+df = load_data(ticker)
+data_load_state.text("✅ داده‌ها با موفقیت بارگذاری شدند.")
 
-    if df is None or "Close" not in df.columns:
-        st.error("❌ ستون Close پیدا نشد. نماد را بررسی کنید.")
-    else:
-        # تبدیل ستون Close به عددی
-        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-        df = df.dropna(subset=['Close'])
+# ----------------- بررسی ستون Close
+if 'Close' not in df.columns or df['Close'].isnull().all():
+    st.error("❌ ستون Close پیدا نشد یا خالی است. لطفاً نماد را بررسی کنید.")
+    st.stop()
 
-        st.subheader("📊 داده‌های اخیر")
-        st.dataframe(df.tail())
+# اطمینان از اینکه Close عددی است
+df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+df = df.dropna(subset=['Close'])
 
-        # آماده‌سازی داده برای Prophet
-        df_train = df[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
+# ----------------- نمایش داده‌ها
+st.subheader("📈 آخرین داده‌ها")
+st.write(df.tail())
 
-        # مدل Prophet
-        m = Prophet(daily_seasonality=True)
-        m.fit(df_train)
+# ----------------- رسم نمودار قیمت
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="Close Price"))
+fig.layout.update(title_text="نمودار قیمت", xaxis_rangeslider_visible=True)
+st.plotly_chart(fig)
 
-        future = m.make_future_dataframe(periods=period)
-        forecast = m.predict(future)
+# ----------------- پیش‌بینی با Prophet
+train_df = df[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"})
+model = Prophet()
+model.fit(train_df)
 
-        st.subheader("📈 پیش‌بینی قیمت")
-        fig1 = plot_plotly(m, forecast)
-        st.plotly_chart(fig1)
+future = model.make_future_dataframe(periods=period)
+forecast = model.predict(future)
 
-        st.subheader("🔍 جزئیات پیش‌بینی")
-        st.write(forecast.tail())
+st.subheader("🔮 پیش‌بینی قیمت")
+fig_forecast = plot_plotly(model, forecast)
+st.plotly_chart(fig_forecast)
+
+# ----------------- جدول پیش‌بینی
+st.subheader("📄 داده‌های پیش‌بینی")
+st.write(forecast.tail())
