@@ -1,79 +1,75 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go
-from datetime import date, timedelta
+import plotly.graph_objs as go
+from datetime import datetime
 
-# عنوان برنامه
-st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide")
-st.title("📊 Crypto Buy/Sell Signal Dashboard")
+st.set_page_config(page_title="Crypto Signal App", layout="wide")
 
-# انتخاب ارز
+# 🎯 لیست ارزها
 cryptos = {
     "Bitcoin (BTC)": "BTC-USD",
     "Ethereum (ETH)": "ETH-USD",
     "Cardano (ADA)": "ADA-USD",
-    "Ripple (XRP)": "XRP-USD",
+    "XRP": "XRP-USD",
     "Stellar (XLM)": "XLM-USD"
 }
-crypto_name = st.selectbox("ارز دیجیتال را انتخاب کنید:", list(cryptos.keys()))
+
+# 🖱 انتخاب ارز و بازه زمانی
+crypto_name = st.sidebar.selectbox("ارز مورد نظر را انتخاب کنید", list(cryptos.keys()))
 symbol = cryptos[crypto_name]
+period = st.sidebar.selectbox("بازه زمانی", ["1mo", "3mo", "6mo", "1y", "2y", "5y"])
 
-# انتخاب بازه زمانی
-days = st.slider("تعداد روزهای گذشته برای نمایش:", 30, 365, 180)
+# 📥 دریافت داده‌ها
+data = yf.download(symbol, period=period, interval="1d")
+data["MA20"] = data["Close"].rolling(window=20).mean()
+data["MA50"] = data["Close"].rolling(window=50).mean()
 
-# دانلود داده
-end_date = date.today()
-start_date = end_date - timedelta(days=days)
-data = yf.download(symbol, start=start_date, end=end_date)
-
-# بررسی ستون قیمت
-price_col = None
-for col in ["Close", "Adj Close"]:
-    if col in data.columns:
-        price_col = col
-        break
-
-if price_col is None or data.empty:
-    st.error("❌ داده‌ای برای این ارز پیدا نشد. لطفا ارز یا بازه زمانی دیگری انتخاب کنید.")
-    st.stop()
-
-# محاسبه میانگین متحرک
-data["MA20"] = data[price_col].rolling(window=20).mean()
-data["MA50"] = data[price_col].rolling(window=50).mean()
-
-# سیگنال خرید / فروش
-latest_price = data[price_col].iloc[-1]
-ma20 = data["MA20"].iloc[-1]
-ma50 = data["MA50"].iloc[-1]
+# 🔍 بررسی آخرین قیمت و سیگنال
+latest_price = float(data["Close"].dropna().iloc[-1])
+ma20 = float(data["MA20"].dropna().iloc[-1])
+ma50 = float(data["MA50"].dropna().iloc[-1])
 
 if latest_price > ma20 > ma50:
-    signal = "🟢 خرید"
+    signal = "📈 خرید"
+    color = "green"
 elif latest_price < ma20 < ma50:
-    signal = "🔴 فروش"
+    signal = "📉 فروش"
+    color = "red"
 else:
-    signal = "🟡 نگه‌داری"
+    signal = "⏳ نگه‌داری"
+    color = "orange"
 
-# نمایش سیگنال
-st.markdown(f"### سیگنال برای {crypto_name}: **{signal}**")
-st.markdown(f"**قیمت فعلی:** ${latest_price:,.2f}")
+# 📢 نمایش سیگنال رنگی
+st.markdown(f"<h2 style='color:{color}'>سیگنال برای {crypto_name}: {signal}</h2>", unsafe_allow_html=True)
 
-# نمودار
+# 📊 نمودار کندل استیک + MA
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=data.index, y=data[price_col], mode='lines', name='قیمت'))
-fig.add_trace(go.Scatter(x=data.index, y=data["MA20"], mode='lines', name='MA20'))
-fig.add_trace(go.Scatter(x=data.index, y=data["MA50"], mode='lines', name='MA50'))
 
-fig.update_layout(
-    title=f"{crypto_name} Price Chart",
-    xaxis_title="تاریخ",
-    yaxis_title="قیمت (USD)",
-    template="plotly_dark",
-    legend=dict(x=0, y=1)
-)
+fig.add_trace(go.Candlestick(
+    x=data.index,
+    open=data['Open'],
+    high=data['High'],
+    low=data['Low'],
+    close=data['Close'],
+    name='Candlestick'
+))
+fig.add_trace(go.Scatter(x=data.index, y=data["MA20"], mode='lines', name='MA20', line=dict(color='blue', width=1.5)))
+fig.add_trace(go.Scatter(x=data.index, y=data["MA50"], mode='lines', name='MA50', line=dict(color='purple', width=1.5)))
+
+fig.update_layout(title=f"📊 نمودار {crypto_name}",
+                  xaxis_title="تاریخ",
+                  yaxis_title="قیمت (USD)",
+                  template="plotly_dark",
+                  xaxis_rangeslider_visible=False)
 
 st.plotly_chart(fig, use_container_width=True)
 
-# جدول داده‌ها
-st.subheader("📅 داده‌های قیمتی")
-st.dataframe(data.tail(20))
+# 📥 دکمه دانلود داده
+csv = data.to_csv().encode('utf-8')
+st.download_button(
+    label="📥 دانلود داده‌ها (CSV)",
+    data=csv,
+    file_name=f"{symbol}_{datetime.now().strftime('%Y-%m-%d')}.csv",
+    mime='text/csv'
+)
