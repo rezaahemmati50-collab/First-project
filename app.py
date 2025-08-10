@@ -1,65 +1,82 @@
 # app.py
 """
-Crypto Signal Dashboard - Final integrated app.py
-English UI. Includes:
-- Header graphic & title
+Crypto Signal Dashboard - Single-file Final
+Features:
+- English UI with attractive header
 - Multi-select tickers + manual input
-- Indicators: MA20/50/200, RSI14, MACD diff
-- Buy/Hold/Sell signal (simple ensemble)
-- Prophet forecasting (3/7/30 days) with safe handling
-- Plotly interactive charts + CSV downloads
-- News section from local data/sample_news.csv (fallback)
+- Upload CSV (ds,y) for offline forecasting
+- Technical indicators: MA20/50/200, RSI14, MACD diff
+- Ensemble buy/hold/sell signal
+- Prophet forecasting (optional; auto-disabled if not installed)
+- News via NewsAPI (optional) with local sample fallback
+- Interactive Plotly charts and CSV downloads
+- Defensive handling for yfinance MultiIndex outputs and missing data
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from prophet import Prophet
 import plotly.graph_objs as go
-from datetime import datetime, date
+from datetime import datetime, timedelta
 import io
+import requests
 import os
+import textwrap
 
-# ----------------- Page config -----------------
+# Try to import Prophet; if not available, disable forecasting gracefully
+try:
+    from prophet import Prophet
+    PROPHET_AVAILABLE = True
+except Exception:
+    PROPHET_AVAILABLE = False
+
+# ---------------- Page config ----------------
 st.set_page_config(page_title="Crypto Signal Dashboard", page_icon="🚀", layout="wide")
-# CSS for header
+# CSS + Header
 st.markdown(
     """
     <style>
     .header {
         display:flex; align-items:center; gap:18px;
-        padding:12px; border-radius:10px;
-        background: linear-gradient(90deg,#0f172a,#0b1220);
+        padding:14px; border-radius:12px;
+        background: linear-gradient(90deg,#0f172a,#07112a);
         color: #f8fafc;
+        margin-bottom: 12px;
     }
     .logo {
-        width:88px; height:88px; border-radius:12px; background:linear-gradient(135deg,#f6d365,#fda085);
-        display:flex; align-items:center; justify-content:center; font-weight:800; color:#0b1220;
+        width:88px; height:88px; border-radius:14px; 
+        background: linear-gradient(135deg,#f6d365,#fda085);
+        display:flex; align-items:center; justify-content:center; 
+        font-weight:900; color:#07112a; font-size:28px;
     }
-    .title { font-size:26px; margin:0; font-weight:700; }
-    .subtitle { font-size:13px; color:#e2e8f0; margin-top:6px; }
+    .title { font-size:22px; margin:0; font-weight:700; }
+    .subtitle { font-size:13px; color:#cbd5e1; margin-top:6px; }
+    .small { font-size:12px; color:#94a3b8; }
     </style>
     """, unsafe_allow_html=True
 )
 
-# header with logo placeholder (user can replace images/header.png)
-col1, col2 = st.columns([1, 9])
-with col1:
-    try:
-        st.markdown('<div class="logo">CF</div>', unsafe_allow_html=True)
-    except Exception:
-        st.write("CF")
-with col2:
-    st.markdown('<div class="header"><div><h1 class="title">Crypto Signal Dashboard</h1>'
-                '<div class="subtitle">Live price, technical signals, and Prophet forecasting — Not financial advice</div>'
-                '</div></div>', unsafe_allow_html=True)
+col_a, col_b = st.columns([1, 8])
+with col_a:
+    st.markdown('<div class="logo">CF</div>', unsafe_allow_html=True)
+with col_b:
+    st.markdown(
+        '<div class="header"><div><h1 class="title">Crypto Signal Dashboard</h1>'
+        '<div class="subtitle">Live prices · Technical indicators · Forecasting (optional)</div>'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
 
-st.write("---")
+st.write("")  # spacing
 
-# ----------------- Helpers -----------------
-@st.cache_data(ttl=180)
-def yf_download_safe(ticker: str, period: str = "3mo", interval: str = "1d"):
-    """Download via yfinance; return DataFrame (may be MultiIndex)."""
+# ---------------- Utilities ----------------
+@st.cache_data(ttl=120)
+def fetch_yfinance(ticker: str, period: str = "3mo", interval: str = "1d"):
+    """
+    Download from yfinance and return DataFrame.
+    Keeps defensive handling for MultiIndex columns.
+    """
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False, threads=False)
         if df is None:
@@ -68,70 +85,76 @@ def yf_download_safe(ticker: str, period: str = "3mo", interval: str = "1d"):
     except Exception as e:
         return pd.DataFrame(), f"yfinance exception: {e}"
 
-def extract_close(df, prefer_ticker=None):
-    """Robust extraction of Close series from dataframe returned by yfinance."""
+def extract_close_from_df(df: pd.DataFrame, prefer_ticker: str = None):
+    """
+    Return pd.Series of Close prices (tz-naive) from a yfinance df (normal or MultiIndex).
+    """
     if df is None or df.empty:
-        return None, "dataframe empty"
+        return None, "empty dataframe"
     # MultiIndex columns
     if isinstance(df.columns, pd.MultiIndex):
-        # try level names
         try:
-            # look for ('Close', ticker) pattern
+            # try common patterns
+            # pattern: ('Close', ticker) or (ticker, 'Close')
             if 'Close' in df.columns.get_level_values(0):
-                candidates = [c for c in df.columns if c[0] == 'Close']
+                close_cols = [c for c in df.columns if c[0] == 'Close']
                 if prefer_ticker:
-                    for c in candidates:
+                    for c in close_cols:
                         if prefer_ticker in str(c[1]):
                             s = df[c].copy()
                             s.index = pd.to_datetime(s.index)
+                            s = s.tz_convert(None) if getattr(s.index, 'tz', None) else s
                             s.name = 'Close'
                             return s.dropna(), ""
-                s = df[candidates[0]].copy()
+                s = df[close_cols[0]].copy()
                 s.index = pd.to_datetime(s.index)
+                s = s.tz_convert(None) if getattr(s.index, 'tz', None) else s
                 s.name = 'Close'
                 return s.dropna(), ""
             if 'Close' in df.columns.get_level_values(1):
-                candidates = [c for c in df.columns if c[1] == 'Close']
-                s = df[candidates[0]].copy()
+                close_cols = [c for c in df.columns if c[1] == 'Close']
+                s = df[close_cols[0]].copy()
                 s.index = pd.to_datetime(s.index)
+                s = s.tz_convert(None) if getattr(s.index, 'tz', None) else s
                 s.name = 'Close'
                 return s.dropna(), ""
         except Exception as e:
             return None, f"multiindex extraction error: {e}"
-        return None, "multiindex found but no 'Close' level"
+        return None, "MultiIndex but Close not found"
     # normal columns
-    if 'Close' in df.columns:
-        s = df['Close'].copy()
-        s.index = pd.to_datetime(s.index)
-        s.name = 'Close'
-        return s.dropna(), ""
-    # try variants
-    for cand in ['Adj Close','Adj_Close','adjclose','close']:
+    for cand in ['Close', 'close', 'Adj Close', 'Adj_Close', 'AdjClose']:
         if cand in df.columns:
             s = df[cand].copy()
             s.index = pd.to_datetime(s.index)
+            try:
+                if s.index.tz is not None:
+                    s.index = s.index.tz_convert(None)
+            except Exception:
+                pass
             s.name = 'Close'
             return s.dropna(), f"used {cand}"
-    return None, "no close column found"
+    return None, "No Close column found"
 
-def safe_numeric_series(s):
+def to_numeric_safe(s):
     try:
-        if isinstance(s, pd.Series):
-            return pd.to_numeric(s, errors='coerce')
-        return pd.to_numeric(pd.Series(s), errors='coerce')
+        return pd.to_numeric(s, errors='coerce')
     except Exception:
         return pd.Series(dtype='float64')
 
-def compute_indicators_from_series(s: pd.Series):
-    """Return DataFrame with Close, MA20, MA50, MA200, RSI14, MACD_diff."""
-    s = safe_numeric_series(s).ffill().dropna()
+# Indicators (no external 'ta' dependency)
+def compute_indicators(series: pd.Series):
+    """
+    Input: series indexed by datetime
+    Returns: DataFrame with Close, MA20, MA50, MA200, RSI14, MACD_diff
+    """
+    s = to_numeric_safe(series).ffill().dropna()
     if s.empty:
         return pd.DataFrame()
     df = pd.DataFrame({'Close': s})
-    df['MA20'] = df['Close'].rolling(20, min_periods=1).mean()
-    df['MA50'] = df['Close'].rolling(50, min_periods=1).mean()
-    df['MA200'] = df['Close'].rolling(200, min_periods=1).mean()
-    # RSI (14) using Wilder's smoothing approx with EMA
+    df['MA20'] = df['Close'].rolling(window=20, min_periods=1).mean()
+    df['MA50'] = df['Close'].rolling(window=50, min_periods=1).mean()
+    df['MA200'] = df['Close'].rolling(window=200, min_periods=1).mean()
+    # RSI (14) via EWMA smoothing (Wilder-like)
     delta = df['Close'].diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -139,7 +162,7 @@ def compute_indicators_from_series(s: pd.Series):
     ma_down = down.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
     rs = ma_up / ma_down.replace(0, np.nan)
     df['RSI14'] = 100 - (100 / (1 + rs))
-    # MACD diff
+    # MACD diff (12-26, signal 9)
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
@@ -147,13 +170,15 @@ def compute_indicators_from_series(s: pd.Series):
     df['MACD_diff'] = macd - signal
     return df
 
-def generate_ensemble_signal(df_ind: pd.DataFrame):
-    """Simple ensemble signal based on MA crossover, RSI, MACD"""
+def ensemble_signal(df_ind: pd.DataFrame):
+    """
+    Simple ensemble:
+      score from MA crossover, RSI, MACD diff
+    """
     if df_ind.empty:
         return "NO DATA"
     last = df_ind.iloc[-1]
     score = 0
-    # MA rule
     try:
         if last['Close'] > last['MA20'] > last['MA50']:
             score += 1
@@ -161,113 +186,98 @@ def generate_ensemble_signal(df_ind: pd.DataFrame):
             score -= 1
     except Exception:
         pass
-    # RSI
-    try:
-        rsi = last['RSI14']
-        if not np.isnan(rsi):
-            if rsi < 30:
-                score += 1
-            elif rsi > 70:
-                score -= 1
-    except Exception:
-        pass
-    # MACD
-    try:
-        macd = last['MACD_diff']
-        if not np.isnan(macd):
-            score += 1 if macd > 0 else -1
-    except Exception:
-        pass
-    # interpret
+    rsi = last.get('RSI14', np.nan)
+    if not np.isnan(rsi):
+        if rsi < 30:
+            score += 1
+        elif rsi > 70:
+            score -= 1
+    macd = last.get('MACD_diff', np.nan)
+    if not np.isnan(macd):
+        score += 1 if macd > 0 else -1
     if score >= 2:
         return "STRONG BUY"
-    if score == 1:
+    elif score == 1:
         return "BUY"
-    if score == 0:
+    elif score == 0:
         return "HOLD"
-    if score == -1:
+    elif score == -1:
         return "SELL"
-    return "STRONG SELL"
+    else:
+        return "STRONG SELL"
 
-def prepare_prophet_df(series: pd.Series):
-    df = series.dropna().to_frame(name='y').reset_index()
-    df = df.rename(columns={df.columns[0]: 'ds', 'y': 'y'})
+def run_prophet_forecast(series: pd.Series, days: int = 3):
+    if not PROPHET_AVAILABLE:
+        raise RuntimeError("Prophet is not available in the environment.")
+    df = series.dropna().to_frame('y').reset_index().rename(columns={series.index.name or series.name: 'ds', 'y':'y'})
     df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
     df['y'] = pd.to_numeric(df['y'], errors='coerce')
     df = df.dropna(subset=['ds','y'])
     if df.shape[0] < 2:
-        raise ValueError("Less than 2 valid rows for Prophet.")
-    return df
+        raise ValueError("Not enough data for Prophet (need at least 2 valid rows).")
+    m = Prophet(daily_seasonality=True)
+    m.fit(df[['ds','y']])
+    future = m.make_future_dataframe(periods=days)
+    forecast = m.predict(future)
+    return forecast[['ds','yhat','yhat_lower','yhat_upper']].tail(days)
 
-def run_prophet_forecast(series: pd.Series, days: int = 3):
+# News utilities: try NewsAPI if key provided, else fallback to local sample
+SAMPLE_NEWS = [
+    {"date":"2025-08-01","title":"Market: BTC breaks resistance","source":"CryptoNews","url":"https://example.com/1"},
+    {"date":"2025-07-30","title":"Ethereum upgrade announced","source":"CoinDaily","url":"https://example.com/2"},
+    {"date":"2025-07-28","title":"Altcoins rally after news","source":"CoinBlog","url":"https://example.com/3"}
+]
+
+def fetch_news_from_newsapi(api_key: str, q: str = "crypto OR bitcoin OR ethereum", page_size: int = 10):
     try:
-        df = prepare_prophet_df(series)
-        m = Prophet(daily_seasonality=True)
-        m.fit(df)
-        future = m.make_future_dataframe(periods=days)
-        forecast = m.predict(future)
-        return forecast[['ds','yhat','yhat_lower','yhat_upper']].tail(days), None
-    except Exception as e:
-        return None, str(e)
-
-def plot_with_forecast(df_ind, forecast_df=None, title="Price"):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind['Close'], name='Close', line=dict(color='#1f77b4')))
-    if 'MA20' in df_ind.columns:
-        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind['MA20'], name='MA20', line=dict(color='#ff7f0e')))
-    if 'MA50' in df_ind.columns:
-        fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind['MA50'], name='MA50', line=dict(color='#2ca02c')))
-    if forecast_df is not None and not forecast_df.empty:
-        # forecast
-        fig.add_trace(go.Scatter(x=forecast_df['ds'], y=forecast_df['yhat'], name='Forecast', line=dict(dash='dash', color='#d62728')))
-        fig.add_trace(go.Scatter(
-            x=pd.concat([forecast_df['ds'], forecast_df['ds'][::-1]]),
-            y=pd.concat([forecast_df['yhat_upper'], forecast_df['yhat_lower'][::-1]]),
-            fill='toself', fillcolor='rgba(214,39,40,0.1)', line=dict(color='rgba(255,255,255,0)'), hoverinfo='skip', showlegend=False
-        ))
-    fig.update_layout(title=title, xaxis_rangeslider_visible=True, height=420)
-    return fig
-
-def read_local_news(limit=10):
-    sample = os.path.join("data","sample_news.csv")
-    if not os.path.exists(sample):
-        return []
-    try:
-        df = pd.read_csv(sample)
-        out = []
-        for _, r in df.head(limit).iterrows():
-            out.append({"date": r.get("date"), "title": r.get("title"), "source": r.get("source"), "url": r.get("url")})
-        return out
+        url = "https://newsapi.org/v2/everything"
+        params = {"q": q, "pageSize": page_size, "language":"en", "sortBy":"publishedAt", "apiKey": api_key}
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        articles = []
+        for a in data.get("articles", []):
+            articles.append({"date": a.get("publishedAt"), "title": a.get("title"), "source": a.get("source",{}).get("name"), "url": a.get("url")})
+        return articles
     except Exception:
         return []
 
-# ----------------- Sidebar Inputs -----------------
-st.sidebar.header("Inputs & Settings")
-mode = st.sidebar.radio("Input mode", ["Manual tickers", "Upload CSV (ds,y)"])
-if mode == "Manual tickers":
-    default_list = "BTC-USD,ETH-USD,ADA-USD,SOL-USD,XRP-USD"
-    chosen = st.sidebar.text_input("Tickers (comma separated)", value=default_list)
-    tickers = [t.strip().upper() for t in chosen.split(",") if t.strip()]
+# ---------------- Sidebar (inputs) ----------------
+st.sidebar.header("Settings")
+input_mode = st.sidebar.radio("Input mode", ["Manual tickers", "Upload CSV (ds,y)"])
+if input_mode == "Manual tickers":
+    presets = ["BTC-USD","ETH-USD","ADA-USD","SOL-USD","XRP-USD","DOGE-USD","LTC-USD","DOT-USD"]
+    tickers_text = st.sidebar.text_input("Tickers (comma separated) — examples: BTC-USD,ETH-USD", value="BTC-USD,ETH-USD")
+    tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
 else:
     uploaded = st.sidebar.file_uploader("Upload CSV (ds,y)", type=["csv"])
 
 history = st.sidebar.selectbox("History period", ["1mo","3mo","6mo","1y","2y"], index=1)
 interval = st.sidebar.selectbox("Interval", ["1d","1h"], index=0)
-forecast_days = st.sidebar.selectbox("Forecast (days)", [3,7,30], index=0)
-enable_prophet = st.sidebar.checkbox("Enable Prophet", value=True)
-show_news = st.sidebar.checkbox("Show News", value=True)
-download_summary = st.sidebar.checkbox("Enable summary CSV download", value=True)
+forecast_days = st.sidebar.selectbox("Forecast days", [3,7,30], index=0)
+enable_prophet = st.sidebar.checkbox("Enable Prophet forecasting (requires 'prophet' package)", value=PROPHET_AVAILABLE)
+if enable_prophet and not PROPHET_AVAILABLE:
+    st.sidebar.warning("Prophet package not installed — forecasting disabled.")
+show_news = st.sidebar.checkbox("Show news (NewsAPI or sample)", value=True)
+newsapi_key = st.sidebar.text_input("NewsAPI key (optional)", value="")
+download_combined = st.sidebar.checkbox("Enable combined CSV download", value=True)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("Tip: For CSV upload use columns `ds` (date) and `y` (price).")
+st.sidebar.markdown("Tip: If Prophet installation fails in your environment, uncheck Prophet to keep the app working.")
 
-# ----------------- Main -----------------
-st.header("Market Analysis")
+# ---------------- Main ----------------
+st.header("Market Analysis & Signals")
 
-if mode == "Upload CSV (ds,y)":
-    if uploaded is None:
-        st.info("Upload a CSV file with columns `ds` and `y` to analyze offline data.")
+# CSV upload path
+if input_mode == "Upload CSV (ds,y)":
+    if 'uploaded' not in locals():
+        st.info("Please upload a CSV file with columns: ds (date), y (price).")
         st.stop()
+    if uploaded is None:
+        st.info("Upload a CSV file to proceed.")
+        st.stop()
+    # parse CSV
     try:
         df_csv = pd.read_csv(uploaded)
         cols_lower = {c.lower(): c for c in df_csv.columns}
@@ -277,85 +287,142 @@ if mode == "Upload CSV (ds,y)":
             df_csv[y_col] = pd.to_numeric(df_csv[y_col], errors='coerce')
             df_csv = df_csv.dropna(subset=[ds_col,y_col]).set_index(ds_col).sort_index()
             series = df_csv[y_col]
-            df_ind = compute_indicators_from_series(series)
-            st.subheader("Uploaded Data - Indicators")
-            st.dataframe(df_ind.tail(8))
-            st.markdown(f"**Signal:** {generate_ensemble_signal(df_ind)}")
-            if enable_prophet:
-                fc, ferr = run_prophet_forecast(series, days=forecast_days)
-                if ferr:
-                    st.warning(f"Forecast not available: {ferr}")
-                else:
+            df_ind = compute_indicators(series)
+            st.subheader("Uploaded Data Indicators")
+            st.dataframe(df_ind.tail(10))
+            st.markdown(f"**Signal:** {ensemble_signal(df_ind)}")
+            if enable_prophet and PROPHET_AVAILABLE:
+                try:
+                    fc = run_prophet_forecast(series, days=forecast_days)
                     fc['ds'] = pd.to_datetime(fc['ds']).dt.date
-                    st.subheader("Forecast (Prophet)")
+                    st.subheader(f"Forecast ({forecast_days} days)")
                     st.table(fc.reset_index(drop=True))
                     st.download_button("Download forecast CSV", fc.to_csv(index=False).encode('utf-8'), file_name="uploaded_forecast.csv", mime="text/csv")
+                except Exception as e:
+                    st.warning(f"Forecast failed: {e}")
         else:
-            st.error("Uploaded CSV must contain 'ds' and 'y' columns (case-insensitive).")
+            st.error("Uploaded CSV must include columns 'ds' and 'y' (case-insensitive).")
     except Exception as e:
         st.error(f"Failed to parse uploaded CSV: {e}")
 else:
-    # Manual tickers path - allow multi-select
-    st.subheader("Select tickers to analyze")
-    sel = st.multiselect("Tickers", options=tickers, default=tickers[:3])
+    # Manual tickers: allow multi-select
+    st.subheader("Choose tickers")
+    sel = st.multiselect("Select tickers to analyze", options=tickers, default=tickers[:2])
     if not sel:
-        st.info("Choose at least one ticker.")
+        st.info("Select at least one ticker.")
         st.stop()
 
     combined_rows = []
     for t in sel:
-        st.markdown(f"---\n### {t}")
-        df_raw, err = yf_download_safe(t, period=history, interval=interval)
+        st.markdown("---")
+        st.subheader(f"{t}")
+        df_raw, err = fetch_yfinance(t, period=history, interval=interval)
         if err:
             st.error(f"Error fetching {t}: {err}")
             continue
-        close_s, dbg = extract_close(df_raw, prefer_ticker=t)
-        if close_s is None or close_s.dropna().empty:
-            st.error(f"Could not extract Close for {t}. debug: {dbg}")
+        close_series, dbg = extract_close_from_df(df_raw, prefer_ticker=t)
+        if close_series is None or close_series.dropna().empty:
+            st.error(f"Could not extract Close for {t}. Debug: {dbg}")
             continue
-        df_ind = compute_indicators_from_series(close_s)
-        # show metrics
+        df_ind = compute_indicators(close_series)
+        if df_ind.empty:
+            st.error(f"No valid indicator data for {t}.")
+            continue
+        # metrics
         last = df_ind.iloc[-1]
         try:
-            last_close = float(last['Close'])
-            st.metric(label=f"{t} Last Close (USD)", value=f"${last_close:,.6f}")
+            last_price = float(last['Close'])
+            st.metric(label=f"{t} Latest Close (USD)", value=f"${last_price:,.6f}")
         except Exception:
-            st.metric(label=f"{t} Last Close (USD)", value="N/A")
-        signal = generate_ensemble_signal(df_ind)
-        st.markdown(f"**Signal:** `{signal}`")
+            st.metric(label=f"{t} Latest Close (USD)", value="N/A")
+        sig = ensemble_signal(df_ind)
+        st.markdown(f"**Signal:** `{sig}`")
+        # show table summary
         st.dataframe(df_ind.tail(8).reset_index().rename(columns={df_ind.index.name or 'index': 'Date'}))
-        # forecast
+        # forecast if enabled
         forecast_df = None
-        if enable_prophet:
-            forecast_df, ferr = run_prophet_forecast(close_s, days=forecast_days)
+        if enable_prophet and PROPHET_AVAILABLE:
+            try:
+                forecast_df, ferr = (run_prophet_forecast(close_series, days=forecast_days), None)
+            except Exception as e:
+                forecast_df, ferr = None, str(e)
             if ferr:
-                st.warning(f"Prophet not available: {ferr}")
-                forecast_df = None
-        # plot
-        fig = plot_with_forecast(df_ind, forecast_df, title=f"{t} Price & Forecast")
-        st.plotly_chart(fig, use_container_width=True)
-        # download forecast
-        if forecast_df is not None:
-            st.download_button(f"Download {t} forecast", forecast_df.to_csv(index=False).encode('utf-8'), file_name=f"{t}_forecast.csv", mime='text/csv')
-        # append for combined CSV
-        tail = df_ind.tail(5).reset_index().rename(columns={df_ind.index.name or 'index': 'Date'})
+                st.warning(f"Forecast unavailable: {ferr}")
+            else:
+                # display forecast summary table
+                fc = forecast_df.copy()
+                fc['ds'] = pd.to_datetime(fc['ds']).dt.date
+                st.subheader(f"{t} Forecast ({forecast_days} days)")
+                st.table(fc.reset_index(drop=True))
+                st.download_button(f"Download {t} forecast", forecast_df.to_csv(index=False).encode('utf-8'), file_name=f"{t}_forecast.csv", mime="text/csv")
+        elif enable_prophet and not PROPHET_AVAILABLE:
+            st.info("Prophet not installed. Uncheck Prophet in sidebar or install the package to enable forecasts.")
+        # interactive plots: price+MAs+forecast; RSI and MACD as small charts
+        try:
+            fig_main = go.Figure()
+            fig_main.add_trace(go.Scatter(x=df_ind.index, y=df_ind['Close'], name='Close', line=dict(color='#1f77b4')))
+            if 'MA20' in df_ind.columns:
+                fig_main.add_trace(go.Scatter(x=df_ind.index, y=df_ind['MA20'], name='MA20', line=dict(color='#ff7f0e')))
+            if 'MA50' in df_ind.columns:
+                fig_main.add_trace(go.Scatter(x=df_ind.index, y=df_ind['MA50'], name='MA50', line=dict(color='#2ca02c')))
+            if forecast_df is not None:
+                fig_main.add_trace(go.Scatter(x=forecast_df['ds'], y=forecast_df['yhat'], name='Forecast', line=dict(dash='dash', color='#d62728')))
+                fig_main.add_trace(go.Scatter(
+                    x=pd.concat([forecast_df['ds'], forecast_df['ds'][::-1]]),
+                    y=pd.concat([forecast_df['yhat_upper'], forecast_df['yhat_lower'][::-1]]),
+                    fill='toself', fillcolor='rgba(214,39,40,0.08)', line=dict(color='rgba(255,255,255,0)'), hoverinfo='skip', showlegend=False))
+            fig_main.update_layout(title=f"{t} Price", xaxis_rangeslider_visible=True, height=460)
+            st.plotly_chart(fig_main, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not render main chart: {e}")
+        # RSI chart
+        try:
+            fig_rsi = go.Figure()
+            fig_rsi.add_trace(go.Scatter(x=df_ind.index, y=df_ind['RSI14'], name='RSI14', line=dict(color='#9467bd')))
+            fig_rsi.update_layout(title=f"{t} RSI (14)", yaxis=dict(range=[0,100]), height=250)
+            st.plotly_chart(fig_rsi, use_container_width=True)
+        except Exception:
+            pass
+        # MACD chart
+        try:
+            fig_macd = go.Figure()
+            fig_macd.add_trace(go.Bar(x=df_ind.index, y=df_ind['MACD_diff'], name='MACD diff'))
+            fig_macd.update_layout(title=f"{t} MACD diff", height=250)
+            st.plotly_chart(fig_macd, use_container_width=True)
+        except Exception:
+            pass
+        # prepare combined rows for CSV
+        tail = df_ind.tail(5).reset_index().rename(columns={df_ind.index.name or 'index':'Date'})
         tail['ticker'] = t
-        combined_rows.append(tail[['ticker','Date','Close','MA20','MA50','RSI14']])
+        combined_rows = tail[['ticker','Date','Close','MA20','MA50','RSI14','MACD_diff']].copy()
+        combined_rows['Date'] = combined_rows['Date'].astype(str)
+        if 'all_combined' not in st.session_state:
+            st.session_state.all_combined = []
+        st.session_state.all_combined.append(combined_rows)
 
     # combined download
-    if download_summary and combined_rows:
-        combined = pd.concat(combined_rows, ignore_index=True)
-        st.download_button("Download combined last rows CSV", combined.to_csv(index=False).encode('utf-8'), file_name="summary_last_rows.csv", mime='text/csv')
+    if download_combined and st.session_state.get('all_combined'):
+        try:
+            combined_df = pd.concat(st.session_state.all_combined, ignore_index=True)
+            st.download_button("Download combined summary CSV", combined_df.to_csv(index=False).encode('utf-8'), file_name='combined_summary.csv', mime='text/csv')
+        except Exception:
+            pass
 
-# news
+# News section
 if show_news:
     st.markdown("---")
     st.header("News")
-    news = read_local_news(limit=10)
-    if not news:
-        st.info("No local news found. Place data/sample_news.csv in the project folder to show sample news.")
+    news_items = []
+    if newsapi_key:
+        news_items = fetch_news_from_newsapi(newsapi_key, q="crypto OR bitcoin OR ethereum", page_size=10)
+    if not news_items:
+        news_items = SAMPLE_NEWS
+    if news_items:
+        df_news = pd.DataFrame(news_items)
+        st.dataframe(df_news)
     else:
-        st.table(pd.DataFrame(news))
+        st.info("No news available.")
 
+# Footer
 st.markdown("---")
 st.caption("Made with ❤️ — Crypto Signal Dashboard. Not financial advice.")
