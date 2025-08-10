@@ -1,7 +1,6 @@
-streamlit
-pandas
-numpy
-yfinance
-prophet
-plotly
-requests
+streamlit>=1.18
+yfinance>=0.2.27
+pandas>=1.5
+numpy>=1.24
+prophet>=1.1
+ta>=0.10.2
