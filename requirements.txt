@@ -3,7 +3,5 @@ yfinance
 plotly
 pandas
 numpy
-scikit-learn
-prophet     # optional — if you want Prophet forecasts
-tensorflow  # optional — only if you want LSTM (heavy)
-ta          # optional if you need technical indicators
+prophet
+ta
