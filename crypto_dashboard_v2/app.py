@@ -1,8 +1,13 @@
 # app.py
 """
-Golden Market Analyzer - Dark + Gold (Streamlit)
-English UI. Prophet removed for lighter package.
+Golden Market Analyzer - Main Dashboard (Dark + Gold)
+- English UI
+- Fear & Greed index + News (sample)
+- Indicators: MA20/50/200, RSI(14), MACD diff
+- Ensemble signal
+- No Prophet (lightweight for mobile)
 """
+
 import os
 from datetime import datetime
 import streamlit as st
@@ -14,41 +19,55 @@ import requests
 
 st.set_page_config(page_title="Golden Market Analyzer", page_icon="💰", layout="wide")
 
-# -------------------------
-# Styling (dark + gold)
-# -------------------------
-st.markdown("""
-<style>
-:root { --gold1: #d4af37; --gold2: #ffd27f; --bg: #0b0b0b; --card: #0f1724; --muted: #9ca3af; }
-.stApp { background: var(--bg); color: #ffffff; }
-.header { display:flex; gap:16px; align-items:center; padding:8px; border-radius:8px; background: linear-gradient(90deg,#080808,#0f1112); }
-.title { font-size:28px; font-weight:800; color:var(--gold1); margin:0; }
-.subtitle { color: #cbd5e1; margin:0; font-size:13px; }
-.small { color: var(--muted); font-size:12px; margin-top:6px; }
-.card { background: var(--card); padding:10px; border-radius:8px; border:1px solid rgba(212,175,55,0.06); }
-</style>
-""", unsafe_allow_html=True)
+# -----------------------------
+# Styling: dark + gold accents
+# -----------------------------
+st.markdown(
+    """
+    <style>
+    :root { --gold1: #d4af37; --gold2: #ffd27f; --bg: #060608; --card: #0f1724; --muted: #9ca3af; }
+    .stApp { background: var(--bg); color: #ffffff; }
+    .header { display:flex; gap:16px; align-items:center; padding:8px; border-radius:8px; background: linear-gradient(90deg,#070707,#0f1112); }
+    .title { font-size:28px; font-weight:800; color:var(--gold1); margin:0; }
+    .subtitle { color: #cbd5e1; margin:0; font-size:13px; }
+    .small { color: var(--muted); font-size:12px; margin-top:6px; }
+    .card { background: var(--card); padding:10px; border-radius:8px; border:1px solid rgba(212,175,55,0.06); }
+    /* responsive tweaks */
+    @media (max-width: 600px) {
+        .title { font-size:22px; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# -------------------------
-# Header image or fallback
-# -------------------------
-col1, col2 = st.columns([1, 8])
-with col1:
+# -----------------------------
+# Header (image fallback)
+# -----------------------------
+col_logo, col_title = st.columns([1, 9])
+with col_logo:
     header_path = os.path.join("assets", "header.png")
     if os.path.exists(header_path):
-        st.image(header_path, use_column_width=False, width=140)
+        st.image(header_path, width=140)
     else:
-        st.markdown('<div style="width:140px;height:80px;border-radius:8px;background:linear-gradient(135deg,#d4af37,#b8860b);display:flex;align-items:center;justify-content:center;font-weight:800;color:#07112a">GMA</div>', unsafe_allow_html=True)
-with col2:
-    st.markdown('<div class="header"><div><h1 class="title">Golden Market Analyzer</h1><div class="subtitle">Live prices · Indicators · Signals · News</div><div class="small">Not financial advice — Use responsibly.</div></div></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="width:140px;height:80px;border-radius:10px;background:linear-gradient(135deg,#d4af37,#b8860b);display:flex;align-items:center;justify-content:center;font-weight:800;color:#07112a">GMA</div>',
+            unsafe_allow_html=True,
+        )
+with col_title:
+    st.markdown(
+        '<div class="header"><div><h1 class="title">Golden Market Analyzer</h1><div class="subtitle">Live prices · Indicators · Signals · News</div><div class="small">Not financial advice — Use responsibly.</div></div></div>',
+        unsafe_allow_html=True,
+    )
 
 st.write("---")
 
-# -------------------------
-# Helpers
-# -------------------------
+# -----------------------------
+# Helper functions (robust)
+# -----------------------------
 @st.cache_data(ttl=120)
 def safe_yf_download(ticker: str, period: str = "3mo", interval: str = "1d"):
+    """Download with error handling; returns (df, error_str or None)."""
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False, threads=False)
         if df is None:
@@ -58,52 +77,89 @@ def safe_yf_download(ticker: str, period: str = "3mo", interval: str = "1d"):
         return pd.DataFrame(), str(e)
 
 def extract_close(df: pd.DataFrame):
+    """
+    Robustly extract a 1D Close series from yfinance dataframe.
+    Returns (pd.Series or None, error_message)
+    """
     if df is None or df.empty:
         return None, "empty dataframe"
     cols = df.columns
+    # MultiIndex case
     if isinstance(cols, pd.MultiIndex):
-        # try find any level containing 'close'
+        # Try to find any column where one level has 'close'
         for col in cols:
             try:
-                if any("close" in str(item).lower() for item in col if item is not None):
-                    s = df[col].copy(); s.index = pd.to_datetime(s.index); s.name = "Close"; return s.dropna(), ""
+                if any("close" in str(x).lower() for x in col if x is not None):
+                    s = df[col].copy()
+                    s.index = pd.to_datetime(s.index)
+                    s.name = "Close"
+                    return s.dropna(), ""
             except Exception:
                 continue
-        # fallback: first numeric column
+        # fallback: pick first numeric column
         for col in cols:
-            if pd.api.types.is_numeric_dtype(df[col]):
-                s = df[col].copy(); s.index = pd.to_datetime(s.index); s.name = "Close"; return s.dropna(), ""
+            try:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    s = df[col].copy()
+                    s.index = pd.to_datetime(s.index)
+                    s.name = "Close"
+                    return s.dropna(), ""
+            except Exception:
+                continue
         return None, "multiindex but no close-like column"
-    # non-multiindex
+    # Non-MultiIndex
     for cand in ["Close", "close", "Adj Close", "Adj_Close", "AdjClose"]:
         if cand in df.columns:
-            s = df[cand].copy(); s.index = pd.to_datetime(s.index); s.name = "Close"; return s.dropna(), ""
-    # fallback
+            s = df[cand].copy()
+            s.index = pd.to_datetime(s.index)
+            s.name = "Close"
+            return s.dropna(), ""
+    # fallback: first numeric column
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     if numeric_cols:
-        s = df[numeric_cols[0]].copy(); s.index = pd.to_datetime(s.index); s.name = "Close"; return s.dropna(), ""
-    return None, "no numeric close column"
+        s = df[numeric_cols[0]].copy()
+        s.index = pd.to_datetime(s.index)
+        s.name = "Close"
+        return s.dropna(), ""
+    return None, "no numeric close column found"
 
 def to_numeric_series(s):
+    """Convert input to a cleaned numeric pd.Series indexed by datetime."""
+    if s is None:
+        return pd.Series(dtype="float64")
+    # if it's a DataFrame, try first column
+    if isinstance(s, pd.DataFrame):
+        if s.shape[1] >= 1:
+            s = s.iloc[:, 0]
+        else:
+            return pd.Series(dtype="float64")
     try:
         out = pd.to_numeric(s, errors="coerce").astype(float)
-        out.index = pd.to_datetime(out.index)
+        # preserve/convert index to datetime if possible
+        try:
+            out.index = pd.to_datetime(out.index)
+        except Exception:
+            pass
         return out.dropna()
     except Exception:
+        # try list conversion
         try:
             arr = np.array(list(s))
-            return pd.Series(pd.to_numeric(arr, errors="coerce")).dropna()
+            ser = pd.Series(pd.to_numeric(arr, errors="coerce")).dropna()
+            return ser
         except Exception:
             return pd.Series(dtype="float64")
 
 def compute_indicators(series: pd.Series):
+    """Return DataFrame with Close, MA20, MA50, MA200, RSI14, MACD_diff."""
     s = to_numeric_series(series).ffill().dropna()
     if s.empty:
         return pd.DataFrame()
     df = pd.DataFrame({"Close": s})
-    df["MA20"] = df["Close"].rolling(20, min_periods=1).mean()
-    df["MA50"] = df["Close"].rolling(50, min_periods=1).mean()
-    df["MA200"] = df["Close"].rolling(200, min_periods=1).mean()
+    df["MA20"] = df["Close"].rolling(window=20, min_periods=1).mean()
+    df["MA50"] = df["Close"].rolling(window=50, min_periods=1).mean()
+    df["MA200"] = df["Close"].rolling(window=200, min_periods=1).mean()
+    # RSI 14
     delta = df["Close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -111,6 +167,7 @@ def compute_indicators(series: pd.Series):
     avg_loss = loss.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
     df["RSI14"] = 100 - (100 / (1 + rs))
+    # MACD diff
     ema12 = df["Close"].ewm(span=12, adjust=False).mean()
     ema26 = df["Close"].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
@@ -119,11 +176,13 @@ def compute_indicators(series: pd.Series):
     return df
 
 def ensemble_signal(df_ind: pd.DataFrame):
+    """Simple ensemble: MA alignment + RSI + MACD -> score"""
     if df_ind.empty:
         return "NO DATA"
     last = df_ind.iloc[-1]
     score = 0
     try:
+        # MA rule
         if last["Close"] > last.get("MA20", 0) > last.get("MA50", 0):
             score += 1
         elif last["Close"] < last.get("MA20", 0) < last.get("MA50", 0):
@@ -139,20 +198,23 @@ def ensemble_signal(df_ind: pd.DataFrame):
     macd = last.get("MACD_diff", np.nan)
     if not np.isnan(macd):
         score += 1 if macd > 0 else -1
-    if score >= 2: return "STRONG BUY"
-    if score == 1: return "BUY"
-    if score == 0: return "HOLD"
-    if score == -1: return "SELL"
+    if score >= 2:
+        return "STRONG BUY"
+    if score == 1:
+        return "BUY"
+    if score == 0:
+        return "HOLD"
+    if score == -1:
+        return "SELL"
     return "STRONG SELL"
 
-# -------------------------
+# -----------------------------
 # Fear & Greed (alternative.me)
-# -------------------------
+# -----------------------------
 @st.cache_data(ttl=600)
 def fetch_fng():
-    url = "https://api.alternative.me/fng/"
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get("https://api.alternative.me/fng/", timeout=5)
         if r.ok:
             j = r.json()
             d = j.get("data", [{}])[0]
@@ -161,16 +223,14 @@ def fetch_fng():
         pass
     return {"value": None, "label": "Unknown"}
 
-# -------------------------
-# News sample / optional NewsAPI
-# -------------------------
+# Sample news fallback
 SAMPLE_NEWS = [
     {"date": "2025-08-01", "title": "Market update: BTC rises", "source": "CryptoNews", "url": "https://example.com/1"},
     {"date": "2025-07-30", "title": "Ethereum upgrade announced", "source": "CoinDaily", "url": "https://example.com/2"},
 ]
 
 @st.cache_data(ttl=300)
-def fetch_news(api_key=None):
+def fetch_news(api_key: str = None):
     if api_key:
         try:
             url = "https://newsapi.org/v2/everything"
@@ -183,9 +243,9 @@ def fetch_news(api_key=None):
             pass
     return SAMPLE_NEWS
 
-# -------------------------
-# Sidebar settings
-# -------------------------
+# -----------------------------
+# Sidebar (controls)
+# -----------------------------
 st.sidebar.header("Settings")
 mode = st.sidebar.radio("Mode", ["Manual tickers", "Upload CSV"])
 if mode == "Manual tickers":
@@ -202,9 +262,9 @@ show_news = st.sidebar.checkbox("Show News & Fear&Greed", value=True)
 enable_downloads = st.sidebar.checkbox("Enable CSV downloads", value=True)
 news_api_key = st.sidebar.text_input("NewsAPI key (optional)", value="")
 
-# -------------------------
-# Top row (FNG + quick info + news)
-# -------------------------
+# -----------------------------
+# Top row: FNG + Quick info + News
+# -----------------------------
 fg = fetch_fng() if show_news else {"value": None, "label": ""}
 c1, c2, c3 = st.columns([2, 3, 5])
 with c1:
@@ -230,17 +290,17 @@ with c3:
 
 st.write("---")
 
-# -------------------------
-# Main
-# -------------------------
+# -----------------------------
+# Main content
+# -----------------------------
 if mode == "Upload CSV":
     if uploaded is None:
         st.info("Please upload a CSV with columns `ds` and `y` (dates and numeric values).")
         st.stop()
     df_csv = pd.read_csv(uploaded)
-    cols = {c.lower(): c for c in df_csv.columns}
-    if "ds" in cols and "y" in cols:
-        ds_col = cols["ds"]; y_col = cols["y"]
+    cols_map = {c.lower(): c for c in df_csv.columns}
+    if "ds" in cols_map and "y" in cols_map:
+        ds_col = cols_map["ds"]; y_col = cols_map["y"]
         df_csv[ds_col] = pd.to_datetime(df_csv[ds_col], errors="coerce")
         df_csv[y_col] = pd.to_numeric(df_csv[y_col], errors="coerce")
         df_csv = df_csv.dropna(subset=[ds_col, y_col]).set_index(ds_col).sort_index()
@@ -256,8 +316,9 @@ else:
     selected = st.multiselect("Tickers", options=tickers, default=tickers[:3])
     add_manual = st.text_input("Add ticker manually (e.g. BTC-USD):", value="")
     if add_manual.strip():
-        if add_manual.strip().upper() not in selected:
-            selected.append(add_manual.strip().upper())
+        candidate = add_manual.strip().upper()
+        if candidate not in selected:
+            selected.append(candidate)
 
     if not selected:
         st.info("Select at least one ticker to continue.")
@@ -276,11 +337,12 @@ else:
             st.error(f"No Close series for {ticker}: {dbg}")
             continue
 
-        # currency conversion best-effort
+        # currency conversion: best-effort
+        series_for_calc = series_close
         if display_currency != "USD":
-            FxCandidates = [f"USD{display_currency}=X", f"{display_currency}=X"]
+            fx_candidates = [f"USD{display_currency}=X", f"{display_currency}=X"]
             fx_val = None
-            for fx in FxCandidates:
+            for fx in fx_candidates:
                 fx_df, fx_err = safe_yf_download(fx, period="7d", interval="1d")
                 if fx_err is None and not fx_df.empty:
                     sfx, _ = extract_close(fx_df)
@@ -291,13 +353,14 @@ else:
                         except Exception:
                             continue
             if fx_val is not None:
-                series_for_calc = series_close * fx_val
+                try:
+                    series_for_calc = series_close * fx_val
+                except Exception:
+                    series_for_calc = series_close
             else:
-                series_for_calc = series_close
                 st.info(f"No FX pair found for {display_currency}; showing USD values.")
-        else:
-            series_for_calc = series_close
 
+        # indicators
         df_ind = compute_indicators(series_for_calc)
         if df_ind.empty:
             st.error("Not enough numeric data to compute indicators.")
@@ -305,45 +368,65 @@ else:
 
         last = df_ind.iloc[-1]
         last_price = float(last["Close"])
-        # smart formatting
+        # smart formatting (show more decimals for small prices)
         if last_price >= 1:
             price_str = f"${last_price:,.2f}"
+        elif last_price >= 0.01:
+            price_str = f"${last_price:,.4f}"
         else:
             price_str = f"${last_price:,.6f}"
         st.metric(f"{ticker} Last ({display_currency})", price_str)
         st.markdown(f"**Signal:** {ensemble_signal(df_ind)}")
 
-        st.dataframe(df_ind.tail(8).reset_index().rename(columns={df_ind.index.name or "index":"Date"}))
+        # show last rows
+        try:
+            display_df = df_ind.tail(8).reset_index().rename(columns={df_ind.index.name or "index": "Date"})
+            st.dataframe(display_df, use_container_width=True)
+        except Exception:
+            st.dataframe(df_ind.tail(8))
 
-        # Plot
+        # interactive plot: Close + MAs
         try:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["Close"], name="Close", line=dict(color="#FFFFFF")))
-            if "MA20" in df_ind.columns: fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["MA20"], name="MA20", line=dict(color="#FFD27F")))
-            if "MA50" in df_ind.columns: fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["MA50"], name="MA50", line=dict(color="#D4AF37")))
-            fig.update_layout(template="plotly_dark", height=480, xaxis_rangeslider_visible=True, title=f"{ticker} ({display_currency})")
+            if "MA20" in df_ind.columns:
+                fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["MA20"], name="MA20", line=dict(color="#FFD27F")))
+            if "MA50" in df_ind.columns:
+                fig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["MA50"], name="MA50", line=dict(color="#D4AF37")))
+            fig.update_layout(template="plotly_dark", height=420, margin=dict(t=30), xaxis_rangeslider_visible=True, title=f"{ticker} ({display_currency})")
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             st.warning(f"Plot error: {e}")
 
         # RSI & MACD small charts
         try:
-            rfig = go.Figure(); rfig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["RSI14"], name="RSI14", line=dict(color="#FFD27F"))); rfig.update_layout(template="plotly_dark", height=220, title="RSI (14)"); st.plotly_chart(rfig, use_container_width=True)
+            rfig = go.Figure()
+            rfig.add_trace(go.Scatter(x=df_ind.index, y=df_ind["RSI14"], name="RSI14", line=dict(color="#FFD27F")))
+            rfig.update_layout(template="plotly_dark", height=200, margin=dict(t=30), title="RSI (14)")
+            st.plotly_chart(rfig, use_container_width=True)
         except Exception:
             pass
         try:
-            mfig = go.Figure(); mfig.add_trace(go.Bar(x=df_ind.index, y=df_ind["MACD_diff"], name="MACD diff", marker_color="#D4AF37")); mfig.update_layout(template="plotly_dark", height=220, title="MACD diff"); st.plotly_chart(mfig, use_container_width=True)
+            mfig = go.Figure()
+            mfig.add_trace(go.Bar(x=df_ind.index, y=df_ind["MACD_diff"], name="MACD diff", marker_color="#D4AF37"))
+            mfig.update_layout(template="plotly_dark", height=200, margin=dict(t=30), title="MACD diff")
+            st.plotly_chart(mfig, use_container_width=True)
         except Exception:
             pass
 
+        # downloads
         if enable_downloads:
-            try: st.download_button(f"Download {ticker} indicators (CSV)", df_ind.to_csv().encode("utf-8"), file_name=f"{ticker}_indicators.csv", mime="text/csv")
-            except Exception: pass
+            try:
+                st.download_button(f"Download {ticker} indicators (CSV)", df_ind.to_csv().encode("utf-8"), file_name=f"{ticker}_indicators.csv", mime="text/csv")
+            except Exception:
+                pass
 
-        tail = df_ind.tail(1).reset_index().rename(columns={df_ind.index.name or "index":"Date"})
+        # summary
+        tail = df_ind.tail(1).reset_index().rename(columns={df_ind.index.name or "index": "Date"})
         tail["ticker"] = ticker
-        summary_rows.append(tail[["ticker","Date","Close","MA20","MA50","RSI14","MACD_diff"]])
+        summary_rows.append(tail[["ticker", "Date", "Close", "MA20", "MA50", "RSI14", "MACD_diff"]])
 
+    # combined CSV
     if enable_downloads and summary_rows:
         try:
             combined = pd.concat(summary_rows, ignore_index=True)
