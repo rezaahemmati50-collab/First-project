@@ -1,9 +1,4 @@
-streamlit>=1.18.0
-pandas>=1.4
-numpy>=1.21
-yfinance>=0.2.27
-plotly>=5.6
-requests>=2.28
-Pillow>=9.0.0
-beautifulsoup4>=4.11.1
-lxml>=4.9.2
+streamlit
+yfinance
+pandas
+plotly
