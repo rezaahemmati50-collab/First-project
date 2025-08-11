@@ -1,0 +1,16 @@
+/* General background */
+body {
+    background-color: black;
+}
+
+/* Title color */
+h1 {
+    color: #FFD700;
+    text-align: center;
+}
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background-color: #1a1a1a;
+    color: white;
+}

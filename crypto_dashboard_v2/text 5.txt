@@ -1,0 +1,3 @@
+CRYPTO_LIST = [
+    "BTC-USD", "ETH-USD", "ADA-USD", "XRP-USD", "SOL-USD", "DOGE-USD", "DOT-USD"
+]
