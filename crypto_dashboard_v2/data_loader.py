@@ -1,0 +1,11 @@
+import yfinance as yf
+import pandas as pd
+
+def load_crypto_data(ticker, start, end):
+    try:
+        df = yf.download(ticker, start=start, end=end)
+        df = df[["Close"]]
+        df.dropna(inplace=True)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
