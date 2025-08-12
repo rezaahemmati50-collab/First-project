@@ -4,7 +4,7 @@ import yfinance as yf
 import plotly.express as px
 from datetime import datetime, timedelta
 
-# عنوان برنامه
+# تنظیمات صفحه
 st.set_page_config(page_title="Crypto Dashboard", layout="wide")
 st.title("📊 Crypto Dashboard")
 
@@ -37,19 +37,25 @@ end_date = datetime.today()
 start_date = end_date - timedelta(days=days)
 data = yf.download(crypto_symbol, start=start_date, end=end_date)
 
-# نمایش جدول داده‌ها
-st.subheader(f"داده‌های {crypto_name}")
-st.dataframe(data.tail(10))
+if data.empty:
+    st.error(f"❌ داده‌ای برای {crypto_name} پیدا نشد. لطفاً بازه زمانی یا ارز را تغییر دهید.")
+else:
+    # نمایش جدول داده‌ها
+    st.subheader(f"داده‌های {crypto_name}")
+    st.dataframe(data.tail(10))
 
-# نمایش نمودار
-fig = px.line(data, x=data.index, y="Close", title=f"قیمت پایانی {crypto_name}")
-st.plotly_chart(fig, use_container_width=True)
+    # نمایش نمودار قیمت پایانی
+    if "Close" in data.columns:
+        fig = px.line(data, x=data.index, y="Close", title=f"قیمت پایانی {crypto_name}")
+        st.plotly_chart(fig, use_container_width=True)
 
-# میانگین متحرک ساده (SMA)
-data["SMA"] = data["Close"].rolling(window=5).mean()
-st.subheader("📈 نمودار همراه با SMA (میانگین متحرک)")
-fig_sma = px.line(data, x=data.index, y=["Close", "SMA"], title="SMA Trend")
-st.plotly_chart(fig_sma, use_container_width=True)
+        # میانگین متحرک ساده (SMA)
+        data["SMA"] = data["Close"].rolling(window=5).mean()
+        st.subheader("📈 نمودار همراه با SMA (میانگین متحرک)")
+        fig_sma = px.line(data, x=data.index, y=["Close", "SMA"], title="SMA Trend")
+        st.plotly_chart(fig_sma, use_container_width=True)
+    else:
+        st.error("❌ ستون 'Close' در داده‌ها پیدا نشد.")
 
 # توضیح پایانی
 st.markdown("این داشبورد با استفاده از **Streamlit** و داده‌های زنده **Yahoo Finance** ساخته شده است.")
