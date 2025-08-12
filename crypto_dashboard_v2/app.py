@@ -6,39 +6,45 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Crypto Dashboard", layout="wide")
 
-st.title("📊 داشبورد تحلیل ارز دیجیتال")
+# عنوان داشبورد
+st.title("📊 داشبورد قیمت ارزهای دیجیتال")
 
-cryptos = {
-    "Bitcoin (BTC)": "BTC-USD",
-    "Ethereum (ETH)": "ETH-USD",
-    "Cardano (ADA)": "ADA-USD",
-    "Ripple (XRP)": "XRP-USD",
-    "Solana (SOL)": "SOL-USD"
-}
+# انتخاب ارز
+symbols = ["BTC-USD", "ETH-USD", "ADA-USD", "XRP-USD", "DOGE-USD", "SOL-USD"]
+symbol = st.selectbox("ارز مورد نظر را انتخاب کنید:", symbols)
 
-crypto_name = st.selectbox("یک ارز انتخاب کنید:", list(cryptos.keys()))
-symbol = cryptos[crypto_name]
+# دانلود داده‌ها
+try:
+    data = yf.download(symbol, period="7d", interval="1h")
 
-period = st.selectbox("بازه زمانی:", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"], index=5)
+    if data.empty or "Close" not in data.columns:
+        st.error(f"داده‌ای برای {symbol} پیدا نشد.")
+    else:
+        # حذف سطرهای خالی
+        data = data.dropna(subset=["Close"])
 
-data = yf.download(symbol, period=period, interval="1d")
+        # محاسبه تغییر ۲۴ ساعت اخیر
+        last = data["Close"].iloc[-1]
+        prev_time = data.index[-1] - timedelta(hours=24)
+        prev = data.loc[data.index >= prev_time, "Close"].iloc[0]
 
-if not data.empty:
-    data = data.dropna(subset=["Close"])
+        change24 = ((last - prev) / prev * 100) if prev != 0 else 0.0
 
-    last = data["Close"].iloc[-1]
-    prev = data["Close"].iloc[-2] if len(data) > 1 else last
-    change24 = ((last - prev) / prev * 100) if prev != 0 else 0.0
+        # نمایش قیمت و تغییر
+        st.metric(label=f"قیمت فعلی {symbol}", value=f"${last:,.4f}", delta=f"{change24:.2f}%")
 
-    col1, col2 = st.columns(2)
-    col1.metric(f"قیمت پایانی {crypto_name}", f"${last:,.4f}", f"{change24:.2f}%")
-    col2.write(f"آخرین بروزرسانی: {data.index[-1].strftime('%Y-%m-%d')}")
+        # رسم نمودار
+        fig = px.line(
+            data.reset_index(),
+            x="Datetime" if "Datetime" in data.reset_index().columns else "Date",
+            y="Close",
+            title=f"روند قیمت {symbol}",
+            labels={"Close": "قیمت پایانی", "Datetime": "تاریخ", "Date": "تاریخ"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    fig = px.line(data.reset_index(), x="Date", y="Close",
-                  title=f"نمودار قیمت {crypto_name}",
-                  labels={"Close": "قیمت پایانی", "Date": "تاریخ"})
-    st.plotly_chart(fig, use_container_width=True)
+        # نمایش جدول
+        st.dataframe(data.tail(10))
 
-    st.dataframe(data.tail(10))
-else:
-    st.warning("⚠️ داده‌ای برای این بازه زمانی موجود نیست.")
+except Exception as e:
+    st.error(f"مشکلی پیش آمد: {e}")
