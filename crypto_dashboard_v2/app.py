@@ -1,49 +1,44 @@
 import streamlit as st
-import pandas as pd
 import yfinance as yf
 import plotly.express as px
+import pandas as pd
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="داشبورد ارز دیجیتال", layout="wide")
+st.set_page_config(page_title="Crypto Dashboard", layout="wide")
 
 st.title("📊 داشبورد تحلیل ارز دیجیتال")
 
 cryptos = {
-    "BTC-USD": "بیت کوین",
-    "ETH-USD": "اتریوم",
-    "ADA-USD": "کاردانو",
-    "XRP-USD": "ریپل",
-    "XLM-USD": "استلار"
+    "Bitcoin (BTC)": "BTC-USD",
+    "Ethereum (ETH)": "ETH-USD",
+    "Cardano (ADA)": "ADA-USD",
+    "Ripple (XRP)": "XRP-USD",
+    "Solana (SOL)": "SOL-USD"
 }
 
-crypto_symbol = st.selectbox("ارز مورد نظر را انتخاب کنید:", list(cryptos.keys()), format_func=lambda x: cryptos[x])
-period = st.selectbox("بازه زمانی:", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "5y", "max"], index=5)
+crypto_name = st.selectbox("یک ارز انتخاب کنید:", list(cryptos.keys()))
+symbol = cryptos[crypto_name]
 
-data = yf.download(crypto_symbol, period=period, interval="1d")
+period = st.selectbox("بازه زمانی:", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"], index=5)
 
-if data.empty:
-    st.error("هیچ داده‌ای برای این ارز و بازه زمانی پیدا نشد.")
+data = yf.download(symbol, period=period, interval="1d")
+
+if not data.empty:
+    data = data.dropna(subset=["Close"])
+
+    last = data["Close"].iloc[-1]
+    prev = data["Close"].iloc[-2] if len(data) > 1 else last
+    change24 = ((last - prev) / prev * 100) if prev != 0 else 0.0
+
+    col1, col2 = st.columns(2)
+    col1.metric(f"قیمت پایانی {crypto_name}", f"${last:,.4f}", f"{change24:.2f}%")
+    col2.write(f"آخرین بروزرسانی: {data.index[-1].strftime('%Y-%m-%d')}")
+
+    fig = px.line(data.reset_index(), x="Date", y="Close",
+                  title=f"نمودار قیمت {crypto_name}",
+                  labels={"Close": "قیمت پایانی", "Date": "تاریخ"})
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(data.tail(10))
 else:
-    if "Close" in data.columns and not data["Close"].dropna().empty:
-        # محاسبه تغییرات ۲۴ ساعته
-        if len(data) >= 2:
-            last = float(data["Close"].iloc[-1])
-            prev = float(data["Close"].iloc[-2])
-            change24 = ((last - prev) / prev * 100) if prev != 0 else 0.0
-            st.metric(label=f"تغییرات 24 ساعته ({cryptos[crypto_symbol]})", value=f"{change24:.2f}%", delta=f"{change24:.2f}%")
-        else:
-            st.warning("داده کافی برای محاسبه تغییرات 24 ساعته وجود ندارد.")
-
-        # رسم نمودار فقط در صورت وجود داده معتبر
-        fig = px.line(
-            data.reset_index(),
-            x="Date",
-            y="Close",
-            title=f"روند قیمت {cryptos[crypto_symbol]}",
-            labels={"Close": "قیمت پایانی", "Date": "تاریخ"}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("داده‌های خام")
-        st.dataframe(data)
-    else:
-        st.error("ستون قیمت پایانی (Close) برای این ارز موجود نیست یا داده‌ها خالی هستند.")
+    st.warning("⚠️ داده‌ای برای این بازه زمانی موجود نیست.")
