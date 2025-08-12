@@ -1,6 +1,5 @@
-streamlit>=1.18
-pandas
+streamlit
 yfinance
 plotly
-numpy
-prophet==1.1.4    # اختیاری؛ اگر نصب نشد، نوتیف داده می‌شود. در Streamlit Cloud ممکن است نصبش زمان‌بر باشد.
+prophet
+pandas
