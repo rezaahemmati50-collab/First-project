@@ -1,65 +1,51 @@
 import streamlit as st
 import yfinance as yf
-import plotly.express as px
 import pandas as pd
-from prophet import Prophet
-from prophet.plot import plot_plotly
+import plotly.express as px
 
-# تنظیمات صفحه
-st.set_page_config(page_title="داشبورد پیشرفته ارز دیجیتال", layout="wide")
-st.title("📈 داشبورد پیشرفته ارز دیجیتال")
+# عنوان برنامه
+st.title("📊 داشبورد قیمت ارزهای دیجیتال")
 
-# انتخاب ارز
-crypto_symbol = st.selectbox(
-    "یک ارز دیجیتال انتخاب کنید:",
-    ["BTC-USD", "ETH-USD", "ADA-USD", "XRP-USD", "DOGE-USD"]
-)
-crypto_name = crypto_symbol.split("-")[0]
+# انتخاب ارز دیجیتال
+cryptos = {
+    "بیت‌کوین (BTC)": "BTC-USD",
+    "اتریوم (ETH)": "ETH-USD",
+    "کاردانو (ADA)": "ADA-USD",
+    "ریپل (XRP)": "XRP-USD",
+    "استلار (XLM)": "XLM-USD"
+}
+crypto_name = st.selectbox("یک ارز انتخاب کنید:", list(cryptos.keys()))
+symbol = cryptos[crypto_name]
 
-# دریافت داده‌ها
-@st.cache_data
-def load_data(symbol):
-    df = yf.download(symbol, period="30d", interval="1h")
-    df.dropna(inplace=True)
-    return df
+# بازه زمانی
+period = st.selectbox("بازه زمانی:", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "5y", "max"], index=5)
 
-data = load_data(crypto_symbol)
+# دریافت داده
+data = yf.download(symbol, period=period)
 
-# بخش قیمت و تغییرات
-st.subheader("📊 قیمت و تغییرات")
-if not data.empty and len(data) >= 2:
-    last = data["Close"].iloc[-1]
-    prev = data["Close"].iloc[-2]
-    change24 = (last - prev) / prev * 100 if prev != 0 else 0.0
-    st.metric(label=f"قیمت پایانی {crypto_name}", value=f"${last:,.2f}", delta=f"{change24:.2f}%")
+if data.empty:
+    st.error("❌ داده‌ای برای این ارز پیدا نشد!")
 else:
-    st.warning("داده کافی برای نمایش قیمت وجود ندارد.")
+    # محاسبه تغییرات 24 ساعته
+    if len(data) >= 2:
+        last = float(data["Close"].iloc[-1])
+        prev = float(data["Close"].iloc[-2])
+        change24 = (last - prev) / prev * 100 if prev != 0 else 0.0
+    else:
+        last = prev = change24 = 0.0
 
-# نمودار قیمت
-st.subheader("📉 نمودار قیمت 30 روز گذشته")
-if not data.empty:
-    fig = px.line(data, x=data.index, y="Close", title=f"{crypto_name} - 30 روز گذشته")
+    st.metric(label=f"📈 قیمت پایانی {crypto_name}", value=f"${last:,.2f}", delta=f"{change24:.2f}%")
+
+    # نمایش نمودار
+    fig = px.line(
+        data,
+        x=data.index,
+        y="Close",
+        title=f"روند قیمت {crypto_name}",
+        labels={"Close": "قیمت پایانی", "index": "تاریخ"}
+    )
     st.plotly_chart(fig, use_container_width=True)
-else:
-    st.error("داده‌ای برای نمایش نمودار موجود نیست.")
 
-# پیش‌بینی قیمت با Prophet
-st.subheader("🔮 پیش‌بینی 3 روز آینده")
-if not data.empty:
-    df_forecast = data.reset_index()[["Datetime", "Close"]]
-    df_forecast.rename(columns={"Datetime": "ds", "Close": "y"}, inplace=True)
-
-    model = Prophet(daily_seasonality=True)
-    model.fit(df_forecast)
-
-    future = model.make_future_dataframe(periods=72, freq='H')
-    forecast = model.predict(future)
-
-    fig_forecast = plot_plotly(model, forecast)
-    st.plotly_chart(fig_forecast, use_container_width=True)
-else:
-    st.warning("داده کافی برای پیش‌بینی وجود ندارد.")
-
-# جدول داده‌ها
-st.subheader("📋 داده‌های اخیر")
-st.dataframe(data.tail(20))
+    # نمایش جدول
+    st.subheader("📋 داده‌های خام")
+    st.dataframe(data.tail(10))
