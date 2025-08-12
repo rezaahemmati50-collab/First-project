@@ -1,30 +1,55 @@
 import streamlit as st
-from data_loader import load_crypto_data
-from utils import plot_price_chart
-from config import CRYPTO_LIST
-import datetime
+import pandas as pd
+import yfinance as yf
+import plotly.express as px
+from datetime import datetime, timedelta
 
-# Page config
-st.set_page_config(page_title="Crypto Dashboard", page_icon="💰", layout="wide")
+# عنوان برنامه
+st.set_page_config(page_title="Crypto Dashboard", layout="wide")
+st.title("📊 Crypto Dashboard")
 
-# Custom CSS
-with open("style.css") as f:
-    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+# لیست ارزها
+cryptos = {
+    "Bitcoin (BTC)": "BTC-USD",
+    "Ethereum (ETH)": "ETH-USD",
+    "Cardano (ADA)": "ADA-USD",
+    "Ripple (XRP)": "XRP-USD",
+    "Stellar (XLM)": "XLM-USD"
+}
 
-# Title
-st.title("💰 Crypto Analysis Dashboard")
+# انتخاب ارز
+crypto_name = st.selectbox("ارز دیجیتال را انتخاب کنید:", list(cryptos.keys()))
+crypto_symbol = cryptos[crypto_name]
 
-# Sidebar
-st.sidebar.header("Settings")
-selected_crypto = st.sidebar.selectbox("Select a cryptocurrency", CRYPTO_LIST)
-start_date = st.sidebar.date_input("Start date", datetime.date(2024, 1, 1))
-end_date = st.sidebar.date_input("End date", datetime.date.today())
+# انتخاب بازه زمانی
+periods = {
+    "7 روز گذشته": 7,
+    "1 ماه گذشته": 30,
+    "3 ماه گذشته": 90,
+    "6 ماه گذشته": 180,
+    "1 سال گذشته": 365
+}
+period_name = st.selectbox("بازه زمانی:", list(periods.keys()))
+days = periods[period_name]
 
-# Load data
-df = load_crypto_data(selected_crypto, start_date, end_date)
+# دریافت داده‌ها
+end_date = datetime.today()
+start_date = end_date - timedelta(days=days)
+data = yf.download(crypto_symbol, start=start_date, end=end_date)
 
-if df is not None and not df.empty:
-    st.subheader(f"Price Chart - {selected_crypto}")
-    plot_price_chart(df)
-else:
-    st.warning("No data available for the selected range.")
+# نمایش جدول داده‌ها
+st.subheader(f"داده‌های {crypto_name}")
+st.dataframe(data.tail(10))
+
+# نمایش نمودار
+fig = px.line(data, x=data.index, y="Close", title=f"قیمت پایانی {crypto_name}")
+st.plotly_chart(fig, use_container_width=True)
+
+# میانگین متحرک ساده (SMA)
+data["SMA"] = data["Close"].rolling(window=5).mean()
+st.subheader("📈 نمودار همراه با SMA (میانگین متحرک)")
+fig_sma = px.line(data, x=data.index, y=["Close", "SMA"], title="SMA Trend")
+st.plotly_chart(fig_sma, use_container_width=True)
+
+# توضیح پایانی
+st.markdown("این داشبورد با استفاده از **Streamlit** و داده‌های زنده **Yahoo Finance** ساخته شده است.")
