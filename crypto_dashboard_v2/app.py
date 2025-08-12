@@ -1,61 +1,49 @@
 import streamlit as st
-import pandas as pd
 import yfinance as yf
 import plotly.express as px
+import pandas as pd
 from datetime import datetime, timedelta
 
-# تنظیمات صفحه
-st.set_page_config(page_title="Crypto Dashboard", layout="wide")
-st.title("📊 Crypto Dashboard")
+# عنوان برنامه
+st.set_page_config(page_title="داشبورد ارز دیجیتال", layout="wide")
+st.title("📊 داشبورد تحلیل قیمت ارزهای دیجیتال")
 
 # لیست ارزها
 cryptos = {
-    "Bitcoin (BTC)": "BTC-USD",
-    "Ethereum (ETH)": "ETH-USD",
-    "Cardano (ADA)": "ADA-USD",
-    "Ripple (XRP)": "XRP-USD",
-    "Stellar (XLM)": "XLM-USD"
+    "Bitcoin": "BTC-USD",
+    "Ethereum": "ETH-USD",
+    "Cardano": "ADA-USD",
+    "Stellar": "XLM-USD"
 }
 
 # انتخاب ارز
-crypto_name = st.selectbox("ارز دیجیتال را انتخاب کنید:", list(cryptos.keys()))
+crypto_name = st.selectbox("یک ارز انتخاب کنید:", list(cryptos.keys()))
 crypto_symbol = cryptos[crypto_name]
 
-# انتخاب بازه زمانی
-periods = {
-    "7 روز گذشته": 7,
-    "1 ماه گذشته": 30,
-    "3 ماه گذشته": 90,
-    "6 ماه گذشته": 180,
-    "1 سال گذشته": 365
-}
-period_name = st.selectbox("بازه زمانی:", list(periods.keys()))
-days = periods[period_name]
+# بازه زمانی
+days = st.slider("تعداد روزهای گذشته:", min_value=7, max_value=365, value=90)
 
-# دریافت داده‌ها
+# دریافت داده
 end_date = datetime.today()
 start_date = end_date - timedelta(days=days)
+
 data = yf.download(crypto_symbol, start=start_date, end=end_date)
 
-if data.empty:
-    st.error(f"❌ داده‌ای برای {crypto_name} پیدا نشد. لطفاً بازه زمانی یا ارز را تغییر دهید.")
-else:
-    # نمایش جدول داده‌ها
+# نمایش داده به صورت جدول
+if not data.empty:
     st.subheader(f"داده‌های {crypto_name}")
-    st.dataframe(data.tail(10))
+    st.dataframe(data.tail())
+else:
+    st.warning("⚠️ داده‌ای برای این ارز پیدا نشد.")
 
-    # نمایش نمودار قیمت پایانی
-    if "Close" in data.columns:
-        fig = px.line(data, x=data.index, y="Close", title=f"قیمت پایانی {crypto_name}")
-        st.plotly_chart(fig, use_container_width=True)
+# رسم نمودار فقط اگر داده معتبر بود
+if not data.empty and "Close" in data.columns:
+    fig = px.line(data, x=data.index, y="Close", title=f"قیمت پایانی {crypto_name}")
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.error(f"❌ داده یا ستون 'Close' برای {crypto_name} پیدا نشد.")
 
-        # میانگین متحرک ساده (SMA)
-        data["SMA"] = data["Close"].rolling(window=5).mean()
-        st.subheader("📈 نمودار همراه با SMA (میانگین متحرک)")
-        fig_sma = px.line(data, x=data.index, y=["Close", "SMA"], title="SMA Trend")
-        st.plotly_chart(fig_sma, use_container_width=True)
-    else:
-        st.error("❌ ستون 'Close' در داده‌ها پیدا نشد.")
-
-# توضیح پایانی
-st.markdown("این داشبورد با استفاده از **Streamlit** و داده‌های زنده **Yahoo Finance** ساخته شده است.")
+# محاسبه تغییرات
+if not data.empty and "Close" in data.columns:
+    change = data["Close"].pct_change().mean() * 100
+    st.metric(label="میانگین درصد تغییرات روزانه", value=f"{change:.2f}%")
