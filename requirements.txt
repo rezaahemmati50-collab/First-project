@@ -1,7 +1,10 @@
 streamlit
+yfinance
 pandas
 numpy
-yfinance
 plotly
 requests
-prophet   # optional - install only if می‌خواهی پیش‌بینی فعال باشد
+scikit-learn
+# optional:
+# prophet
+# ta
