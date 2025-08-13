@@ -1,6 +1,6 @@
 # app.py
-# Global Crypto Insight — Full, robust (gold + black theme)
-# Single-file Streamlit app. Prophet & ta are OPTIONAL.
+# Global Crypto Insight — Full (gold+black) with Top-20 dropdown
+# Single-file Streamlit app (Prophet & ta optional).
 
 import streamlit as st
 import yfinance as yf
@@ -10,9 +10,10 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime, timedelta
 
+# ---------- Page setup ----------
 st.set_page_config(page_title="Global Crypto Insight", page_icon="🟡", layout="wide")
 
-# ---------------- Optional libs ----------------
+# Optional libs (fail-safe import)
 HAS_PROPHET = False
 try:
     from prophet import Prophet
@@ -27,159 +28,126 @@ try:
 except Exception:
     HAS_TA = False
 
-# ---------------- Utilities ----------------
+pd.options.mode.chained_assignment = None  # quiet pandas warnings
+
+# ---------- Helpers ----------
 def ensure_flat_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
+    """Make sure yfinance returns single-level columns."""
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    # yfinance گاهی Adj Close دارد ولی Close نه
-    if "Close" not in df.columns and "Adj Close" in df.columns:
-        df = df.rename(columns={"Adj Close": "Close"})
     return df
 
-def clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_ohlc_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Reset index and ensure a proper Date column exists."""
     if df is None or df.empty:
         return pd.DataFrame()
-    df = ensure_flat_columns(df)
-    df = df.reset_index()
-    # نام ستون تاریخ را یکدست می‌کنیم
+    df = ensure_flat_columns(df).reset_index()
     if "Date" not in df.columns:
-        # اولین ستون را Date فرض می‌کنیم
+        # first column is usually DatetimeIndex after reset_index
         first_col = df.columns[0]
-        df = df.rename(columns={first_col: "Date"})
-    # به datetime تبدیل کنیم
+        df.rename(columns={first_col: "Date"}, inplace=True)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    # ستون‌های ضروری را اگر نیست، بسازیم تا کرش نکند
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
-        if col not in df.columns:
-            df[col] = np.nan
-    # فقط ردیف‌های با تاریخ معتبر
-    df = df[df["Date"].notna()].sort_values("Date")
-    return df
+    # keep only standard OHLCV if present
+    expected = [c for c in ["Open","High","Low","Close","Adj Close","Volume"] if c in df.columns]
+    return df[["Date"] + expected].dropna(subset=["Date"]).sort_values("Date")
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=180)
 def fetch_yf(symbol: str, period="3mo", interval="1d") -> pd.DataFrame:
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
+        df = yf.download(symbol, period=period, interval=interval, progress=False)
         if df is None or df.empty:
             return pd.DataFrame()
-        return clean_ohlcv(df)
+        return normalize_ohlc_index(df)
     except Exception:
         return pd.DataFrame()
 
-def safe_last_two(series: pd.Series):
-    """Return (last, prev) as floats or (np.nan, np.nan) if not enough data."""
-    try:
-        s = pd.to_numeric(series, errors="coerce").dropna()
-        if s.shape[0] == 0:
-            return (np.nan, np.nan)
-        if s.shape[0] == 1:
-            return (float(s.iloc[-1]), float(s.iloc[-1]))
-        return (float(s.iloc[-1]), float(s.iloc[-2]))
-    except Exception:
-        return (np.nan, np.nan)
+def series_close(df: pd.DataFrame) -> pd.Series:
+    """Safely return Close series if available, else empty."""
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    col = "Close" if "Close" in df.columns else (df.columns[df.columns.str.lower().eq("close")][0] if hasattr(df.columns,'str') and df.columns.str.lower().eq("close").any() else None)
+    if col is None:
+        return pd.Series(dtype=float)
+    s = pd.to_numeric(df[col], errors="coerce")
+    return s
 
-def moving_avg_forecast(series: pd.Series, days: int):
+def moving_avg_forecast(close_s: pd.Series, days: int) -> np.ndarray:
     try:
-        s = pd.to_numeric(series, errors="coerce").dropna()
+        s = pd.to_numeric(close_s, errors="coerce").dropna()
         if s.empty:
             return np.array([np.nan]*days)
         last = float(s.iloc[-1])
-        pct_mean = s.pct_change().dropna().tail(30).mean()
-        pct_mean = 0.0 if np.isnan(pct_mean) else float(pct_mean)
-        return np.array([ last * ((1 + pct_mean) ** i) for i in range(1, days+1) ])
+        avg_pct = s.pct_change().dropna().mean() if s.shape[0] > 1 else 0.0
+        return np.array([last * ((1 + (avg_pct if np.isfinite(avg_pct) else 0.0)) ** i) for i in range(1, days+1)])
     except Exception:
         return np.array([np.nan]*days)
 
 def simple_rsi(series, window=14):
-    s = pd.to_numeric(series, errors="coerce")
-    delta = s.diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
+    delta = series.diff()
+    up = delta.clip(lower=0.0)
+    down = -1.0 * delta.clip(upper=0.0)
     ma_up = up.ewm(alpha=1/window, adjust=False).mean()
     ma_down = down.ewm(alpha=1/window, adjust=False).mean()
-    rs = ma_up / (ma_down + 1e-10)
-    return 100 - (100 / (1 + rs))
+    rs = ma_up / (ma_down.replace(0, np.nan))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
 def simple_macd(series, fast=12, slow=26, signal=9):
-    s = pd.to_numeric(series, errors="coerce")
-    ema_fast = s.ewm(span=fast, adjust=False).mean()
-    ema_slow = s.ewm(span=slow, adjust=False).mean()
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
     macd = ema_fast - ema_slow
     macd_signal = macd.ewm(span=signal, adjust=False).mean()
     macd_diff = macd - macd_signal
     return macd, macd_signal, macd_diff
 
-def compute_combined_signal(close_series: pd.Series, next_forecast=None):
-    s = pd.to_numeric(close_series, errors="coerce").dropna()
-    if s.empty:
+def compute_combined_signal(close_series, next_forecast=None):
+    cs = pd.to_numeric(close_series, errors="coerce").dropna()
+    if cs.empty:
         return ("NO DATA", "#9e9e9e", "insufficient data")
+    ma20 = cs.rolling(20, min_periods=1).mean().iloc[-1]
+    ma50 = cs.rolling(50, min_periods=1).mean().iloc[-1]
+    ma200 = cs.rolling(200, min_periods=1).mean().iloc[-1]
 
-    ma20 = s.rolling(20, min_periods=1).mean().iloc[-1]
-    ma50 = s.rolling(50, min_periods=1).mean().iloc[-1]
-    ma200 = s.rolling(200, min_periods=1).mean().iloc[-1]
-
-    # RSI / MACD (built-in یا ساده)
     try:
         if HAS_TA:
-            rsi = ta.momentum.RSIIndicator(s, window=14).rsi().iloc[-1]
-            macd_diff = ta.trend.MACD(s).macd_diff().iloc[-1]
+            rsi = ta.momentum.RSIIndicator(cs, window=14).rsi().iloc[-1]
+            macd_diff = ta.trend.MACD(cs).macd_diff().iloc[-1]
         else:
-            rsi = simple_rsi(s).iloc[-1]
-            _, _, macd_diff_series = simple_macd(s)
-            macd_diff = macd_diff_series.iloc[-1]
+            rsi = simple_rsi(cs).iloc[-1]
+            _, _, md = simple_macd(cs)
+            macd_diff = md.iloc[-1]
     except Exception:
-        rsi, macd_diff = np.nan, np.nan
+        rsi = np.nan; macd_diff = np.nan
 
     score, reasons = 0, []
-
     # MAs
-    try:
-        if ma20 > ma50:
-            score += 2; reasons.append("MA20>MA50")
+    if ma20 > ma50:
+        score += 2; reasons.append("MA20>MA50")
+    else:
+        score -= 1; reasons.append("MA20<=MA50")
+    if np.isfinite(ma200):
+        if ma50 > ma200:
+            score += 1; reasons.append("MA50>MA200")
         else:
-            score -= 1; reasons.append("MA20<=MA50")
-        if not np.isnan(ma200):
-            if ma50 > ma200:
-                score += 1; reasons.append("MA50>MA200")
-            else:
-                score -= 1; reasons.append("MA50<=MA200")
-    except Exception:
-        pass
+            score -= 1; reasons.append("MA50<=MA200")
 
     # RSI
-    try:
-        if not np.isnan(rsi):
-            if rsi < 30:
-                score += 1; reasons.append(f"RSI low ({rsi:.1f})")
-            elif rsi > 70:
-                score -= 1; reasons.append(f"RSI high ({rsi:.1f})")
-    except Exception:
-        pass
+    if pd.notna(rsi):
+        if rsi < 30: score += 1; reasons.append(f"RSI low ({rsi:.1f})")
+        elif rsi > 70: score -= 1; reasons.append(f"RSI high ({rsi:.1f})")
 
     # MACD
-    try:
-        if not np.isnan(macd_diff):
-            if macd_diff > 0:
-                score += 1; reasons.append("MACD positive")
-            else:
-                score -= 1; reasons.append("MACD negative")
-    except Exception:
-        pass
+    if pd.notna(macd_diff):
+        if macd_diff > 0: score += 1; reasons.append("MACD+")
+        else: score -= 1; reasons.append("MACD-")
 
-    # Forecast drift
-    try:
-        if next_forecast is not None and not np.isnan(next_forecast):
-            last = float(s.iloc[-1])
-            if last != 0:
-                pct = (next_forecast - last) / last
-                if pct > 0.01:
-                    score += 1; reasons.append(f"Forecast +{pct*100:.2f}%")
-                elif pct < -0.01:
-                    score -= 1; reasons.append(f"Forecast {pct*100:.2f}%")
-    except Exception:
-        pass
+    # Forecast tilt
+    if next_forecast is not None and np.isfinite(next_forecast):
+        last = float(cs.iloc[-1])
+        if last != 0:
+            pct = (next_forecast - last) / last
+            if pct > 0.01: score += 1; reasons.append(f"Forecast +{pct*100:.2f}%")
+            elif pct < -0.01: score -= 1; reasons.append(f"Forecast {pct*100:.2f}%")
 
     if score >= 4: return ("STRONG BUY", "#d4ffb3", " · ".join(reasons))
     if score >= 2: return ("BUY", "#b2ff66", " · ".join(reasons))
@@ -188,13 +156,13 @@ def compute_combined_signal(close_series: pd.Series, next_forecast=None):
     if score == -1: return ("MILD SELL", "#ffb86b", " · ".join(reasons))
     return ("SELL", "#ff7b7b", " · ".join(reasons))
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600)
 def fetch_fear_greed():
     try:
         r = requests.get("https://api.alternative.me/fng/", timeout=8)
         if r.status_code == 200:
             j = r.json()
-            if isinstance(j, dict) and "data" in j and len(j["data"]) > 0:
+            if "data" in j and len(j["data"]) > 0:
                 e = j["data"][0]
                 return {
                     "value": int(e.get("value", 50)),
@@ -208,25 +176,23 @@ def fetch_fear_greed():
 
 def fmt_currency(x, cur="USD"):
     try:
-        if x is None or (isinstance(x, float) and np.isnan(x)):
-            return "—"
         return f"{x:,.2f} {cur}"
     except Exception:
         return "—"
 
-# ---------------- Header (gold + black) ----------------
+# ---------- Header (gold + black) ----------
 st.markdown(
     """
     <style>
-    .gci-header{
-      padding:20px;border-radius:12px;
-      background: linear-gradient(90deg,#0b0b0b 0%, #1a1a1a 50%, #3a2b10 100%);
-      color: #f9f4ef; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-    }
-    .gci-title{font-size:26px;font-weight:800;color:#f5d76e}
-    .gci-sub{color:#e6dccd;margin-top:6px}
-    .kpi-card { background:linear-gradient(180deg,#2b2b2b,#171717); padding:12px;border-radius:8px; color:#fff; }
-    .muted { color:#b6b6b6; }
+      .gci-header{
+        padding:20px;border-radius:12px;
+        background: linear-gradient(90deg,#0b0b0b 0%, #1a1a1a 50%, #3a2b10 100%);
+        color: #f9f4ef; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      }
+      .gci-title{font-size:26px;font-weight:800;color:#f5d76e}
+      .gci-sub{color:#e6dccd;margin-top:6px}
+      .kpi-card { background:linear-gradient(180deg,#2b2b2b,#171717); padding:12px;border-radius:8px; color:#fff; }
+      .note {color:#c9c9c9; font-size: 13px}
     </style>
     <div class="gci-header">
       <div class="gci-title">Global Crypto Insight</div>
@@ -236,155 +202,152 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ---------------- Sidebar ----------------
+# ---------- Sidebar ----------
 st.sidebar.header("Settings")
-currency = st.sidebar.selectbox("Display currency", ["USD", "CAD", "EUR", "GBP"], index=0)
-period = st.sidebar.selectbox("History period", ["1mo", "3mo", "6mo", "1y", "2y"], index=1)
-interval = st.sidebar.selectbox("Interval", ["1d", "1h"], index=0)
+
+# Top 20 coins list (yfinance tickers)
+TOP20 = [
+    "BTC-USD","ETH-USD","USDT-USD","BNB-USD","SOL-USD",
+    "XRP-USD","USDC-USD","DOGE-USD","TON-USD","ADA-USD",
+    "TRX-USD","AVAX-USD","SHIB-USD","DOT-USD","BCH-USD",
+    "LINK-USD","NEAR-USD","LTC-USD","UNI7083-USD","DAI-USD"
+]
+# Note: Some stable/defi tickers may return flat series; app handles gracefully.
+
+currency = st.sidebar.selectbox("Display currency", ["USD","CAD","EUR","GBP"], index=0)
+period = st.sidebar.selectbox("History period", ["1mo","3mo","6mo","1y","2y"], index=1)
+interval = st.sidebar.selectbox("Interval", ["1d","1h"], index=0)
+
+# Primary chooser
+default_pick = "BTC-USD"
+primary = st.sidebar.selectbox("Primary symbol (Top-20)", TOP20, index=TOP20.index(default_pick))
+
+# Additional symbols (comma separated)
+extra = st.sidebar.text_area("Extra symbols (comma separated)", value="ETH-USD,ADA-USD,SOL-USD")
+extra_list = [s.strip().upper() for s in extra.split(",") if s.strip()]
+
+# Build final symbol universe (dedup, keep order)
+symbols = []
+for s in [primary] + [x for x in TOP20 if x != primary] + extra_list:
+    if s not in symbols:
+        symbols.append(s)
 
 st.sidebar.markdown("---")
-symbols_default = st.sidebar.text_area(
-    "Symbols (comma separated)",
-    value="BTC-USD,ETH-USD,ADA-USD,SOL-USD,XRP-USD"
-).upper()
-symbols = [s.strip() for s in symbols_default.split(",") if s.strip()]
+st.sidebar.caption("Tip: Install `prophet` and `ta` for advanced forecasts & indicators.")
 
-st.sidebar.markdown("---")
-manual = st.sidebar.text_input("Add single symbol (e.g. ADA-USD):", value="")
-if manual:
-    m = manual.strip().upper()
-    if m not in symbols:
-        symbols.insert(0, m)
-
-st.sidebar.markdown("---")
-st.sidebar.caption("Prophet & ta are optional. Install them for advanced forecasting and indicators.")
-
-# ---------------- FX (USD -> target) ----------------
-@st.cache_data(ttl=300, show_spinner=False)
-def get_fx_usd_to(target: str) -> float:
-    if target == "USD":
-        return 1.0
-    tick = {"CAD": "USDCAD=X", "EUR": "USDEUR=X", "GBP": "USDGBP=X"}.get(target)
-    if not tick:
-        return 1.0
+# FX rate (USD -> target)
+@st.cache_data(ttl=300)
+def get_fx(target):
+    if target == "USD": return 1.0
+    mp = {"CAD": "USDCAD=X", "EUR": "USDEUR=X", "GBP": "USDGBP=X"}
+    t = mp.get(target)
+    if not t: return 1.0
     try:
-        df = yf.download(tick, period="7d", interval="1d", progress=False)
-        if df is None or df.empty:
-            return 1.0
-        df = ensure_flat_columns(df)
-        close = pd.to_numeric(df.get("Close", pd.Series(dtype=float)), errors="coerce").dropna()
-        return float(close.iloc[-1]) if not close.empty else 1.0
+        df = yf.download(t, period="5d", interval="1d", progress=False)
+        if df is None or df.empty: return 1.0
+        df = normalize_ohlc_index(df)
+        s = series_close(df).dropna()
+        if s.empty: return 1.0
+        return float(s.iloc[-1])
     except Exception:
         return 1.0
 
-fx = get_fx_usd_to(currency)
+fx = get_fx(currency)
 
-# ---------------- Tabs ----------------
-tab_market, tab_forecast, tab_portfolio, tab_news, tab_about = st.tabs(
-    ["Market", "Forecast", "Portfolio", "News", "About"]
-)
+# ---------- Tabs ----------
+tabs = st.tabs(["Market","Forecast","Portfolio","News","About"])
+tab_market, tab_forecast, tab_portfolio, tab_news, tab_about = tabs
 
-# ---------------- Market Tab ----------------
+# ---------- Market Tab ----------
 with tab_market:
     st.header("Market Overview")
 
-    c1, c2, c3, c4 = st.columns([1.3, 2, 2, 2])
     # Fear & Greed
+    fg = fetch_fear_greed()
+    c1, c2, c3, c4 = st.columns([1.2, 2, 2, 2])
+
     with c1:
-        fg = fetch_fear_greed()
         if fg["value"] is not None:
-            figg = go.Figure(
-                go.Indicator(
-                    mode="gauge+number",
-                    value=fg["value"],
-                    title={"text": f"Fear & Greed ({fg['date']})"},
-                    gauge={
-                        "axis": {"range": [0, 100]},
-                        "bar": {"color": "#f5d76e"},
-                        "steps": [
-                            {"range": [0, 25], "color": "#5c1f1f"},
-                            {"range": [25, 40], "color": "#9b5f00"},
-                            {"range": [40, 60], "color": "#b0894a"},
-                            {"range": [60, 75], "color": "#7bb383"},
-                            {"range": [75, 100], "color": "#2b9348"},
-                        ],
-                    },
-                )
-            )
+            figg = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=fg["value"],
+                title={"text": f"Fear & Greed ({fg['date']})"},
+                gauge={
+                    "axis": {"range": [0, 100]},
+                    "bar": {"color": "#f5d76e"},
+                    "steps": [
+                        {"range": [0, 25], "color": "#5c1f1f"},
+                        {"range": [25, 40], "color": "#9b5f00"},
+                        {"range": [40, 60], "color": "#b0894a"},
+                        {"range": [60, 75], "color": "#7bb383"},
+                        {"range": [75, 100], "color": "#2b9348"},
+                    ],
+                },
+            ))
             figg.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(figg, use_container_width=True)
         else:
             st.info("Fear & Greed: N/A")
 
-    # Snapshot (first symbol)
     with c2:
         st.markdown("### Snapshot")
-        if len(symbols) > 0:
-            s0 = symbols[0]
-            d0 = fetch_yf(s0, period=period, interval=interval)
-            if not d0.empty and "Close" in d0.columns:
-                last, prev = safe_last_two(d0["Close"])
-                if not np.isnan(last) and not np.isnan(prev) and prev != 0:
-                    st.metric(f"{s0} Latest ({currency})", f"{(last*fx):,.2f}", delta=f"{((last-prev)/prev*100):+.2f}%")
-                else:
-                    st.info(f"{s0}: insufficient data.")
-            else:
-                st.info(f"{s0}: no data.")
+        s0 = primary
+        d0 = fetch_yf(s0, period=period, interval=interval)
+        c0 = series_close(d0).dropna()
+        if not c0.empty:
+            last = float(c0.iloc[-1]) * fx
+            prev = float(c0.iloc[-2]) * fx if c0.shape[0] >= 2 else last
+            ch = (last - prev) / prev * 100 if prev != 0 else 0.0
+            st.metric(f"{s0} Latest ({currency})", f"{last:,.2f}", delta=f"{ch:+.2f}%")
         else:
-            st.info("No symbols configured.")
+            st.info(f"{s0}: no data")
 
-    # Period High
     with c3:
         st.markdown("### Period High")
         rows = []
         for s in symbols[:6]:
             d = fetch_yf(s, period=period, interval=interval)
             if not d.empty and "High" in d.columns:
-                high = pd.to_numeric(d["High"], errors="coerce").dropna()
-                if not high.empty:
-                    rows.append(f"{s}: {(float(high.max())*fx):,.2f} {currency}")
-        if rows:
-            st.markdown("<br/>".join(rows), unsafe_allow_html=True)
-        else:
-            st.info("No high data.")
+                hi = pd.to_numeric(d["High"], errors="coerce").dropna()
+                if not hi.empty:
+                    rows.append(f"{s}: {float(hi.max()) * fx:,.2f} {currency}")
+        if rows: st.markdown("<br/>".join(rows), unsafe_allow_html=True)
+        else: st.info("No high data.")
 
-    # Period Low
     with c4:
         st.markdown("### Period Low")
         rows = []
         for s in symbols[:6]:
             d = fetch_yf(s, period=period, interval=interval)
             if not d.empty and "Low" in d.columns:
-                low = pd.to_numeric(d["Low"], errors="coerce").dropna()
-                if not low.empty:
-                    rows.append(f"{s}: {(float(low.min())*fx):,.2f} {currency}")
-        if rows:
-            st.markdown("<br/>".join(rows), unsafe_allow_html=True)
-        else:
-            st.info("No low data.")
+                lo = pd.to_numeric(d["Low"], errors="coerce").dropna()
+                if not lo.empty:
+                    rows.append(f"{s}: {float(lo.min()) * fx:,.2f} {currency}")
+        if rows: st.markdown("<br/>".join(rows), unsafe_allow_html=True)
+        else: st.info("No low data.")
 
     st.markdown("---")
 
-    # Summary table with signals
-    st.subheader("Summary")
+    # Summary table (robust)
     summary = []
     with st.spinner("Fetching market data..."):
-        for s in symbols:
+        for s in symbols[:20]:  # limit to 20 for speed
             d = fetch_yf(s, period=period, interval=interval)
-            if d.empty or "Close" not in d.columns:
-                summary.append({"Symbol": s, "Price": None, "Change24h": None, "Signal": "NO DATA", "Color": "#9e9e9e"})
+            c = series_close(d).dropna()
+            if c.empty:
+                summary.append({"Symbol": s, "Price": None, "Change24h": None, "Signal": "NO DATA", "Color": "#9e9e9e", "Reason": "—"})
                 continue
-            d = d.sort_values("Date").reset_index(drop=True)
-            last, prev = safe_last_two(d["Close"])
-            price = last * fx if not np.isnan(last) else None
-            change24 = ((last - prev) / prev * 100) if (not np.isnan(last) and not np.isnan(prev) and prev != 0) else 0.0
-            fc = moving_avg_forecast(d["Close"], 1)
-            next_fc = float(fc[0]) if len(fc) > 0 and not np.isnan(fc[0]) else None
-            label, color, reason = compute_combined_signal(d["Close"], next_fc)
+            price_usd = float(c.iloc[-1])
+            price = price_usd * fx
+            prev_usd = float(c.iloc[-2]) if c.shape[0] >= 2 else price_usd
+            change24 = (price_usd - prev_usd) / prev_usd * 100 if prev_usd != 0 else 0.0
+            fc1 = moving_avg_forecast(c, 1)
+            next_fc = float(fc1[0]) if len(fc1) > 0 else None
+            label, color, reason = compute_combined_signal(c, next_fc)
             summary.append({
                 "Symbol": s,
                 "Price": price,
-                "Change24h": round(change24, 2) if not np.isnan(change24) else 0.0,
+                "Change24h": round(change24, 2),
                 "Signal": label,
                 "Color": color,
                 "Reason": reason
@@ -392,91 +355,90 @@ with tab_market:
 
     df_sum = pd.DataFrame(summary)
     if not df_sum.empty:
-        df_sum["PriceStr"] = df_sum["Price"].apply(lambda v: fmt_currency(v, currency))
-        df_sum["ChangeStr"] = df_sum["Change24h"].apply(lambda v: "—" if v is None or (isinstance(v,float) and np.isnan(v)) else f"{float(v):+.2f}%")
+        df_sum["PriceStr"] = df_sum["Price"].apply(lambda v: fmt_currency(v, currency) if pd.notna(v) else "—")
+        df_sum["ChangeStr"] = df_sum["Change24h"].apply(lambda v: f"{v:+.2f}%")
         st.dataframe(
-            df_sum[["Symbol", "PriceStr", "ChangeStr", "Signal"]].rename(columns={
-                "Symbol": "Symbol", "PriceStr": "Price", "ChangeStr": "24h", "Signal": "Signal"
-            }),
-            use_container_width=True
+            df_sum[["Symbol", "PriceStr", "ChangeStr", "Signal"]],
+            use_container_width=True,
+            hide_index=True
         )
     else:
         st.info("No data.")
 
+    # Signal cards
     st.markdown("### Signal Cards")
-    if not df_sum.empty:
-        cols = st.columns(min(6, max(1, len(df_sum))))
-        for i, row in df_sum.iterrows():
-            c = cols[i % len(cols)]
-            with c:
-                html = f"""
-                <div style='background:{row["Color"]};padding:10px;border-radius:8px;text-align:center;color:#021014;'>
-                    <strong>{row["Symbol"]}</strong><br/>
-                    {row["Signal"]}<br/>
-                    {row["PriceStr"]} · {row["ChangeStr"]}
-                </div>
-                """
-                st.markdown(html, unsafe_allow_html=True)
+    ncols = min(6, max(1, len(df_sum)))
+    cols = st.columns(ncols)
+    for i, row in df_sum.iterrows():
+        c = cols[i % ncols]
+        with c:
+            html = f"""
+            <div style='background:{row["Color"]};padding:10px;border-radius:8px;text-align:center;color:#021014;'>
+              <strong>{row["Symbol"]}</strong><br/>
+              {row["Signal"]}<br/>
+              {row["PriceStr"]} · {row["ChangeStr"]}
+            </div>
+            """
+            st.markdown(html, unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("Trend Heatmap (daily %)")
     heat_days = st.slider("Heatmap lookback (days)", min_value=5, max_value=30, value=14)
     heat_data = {}
     dates_idx = None
-    for s in symbols:
+    for s in symbols[:20]:
         d = fetch_yf(s, period="2mo", interval="1d")
-        if d.empty or "Date" not in d.columns or "Close" not in d.columns:
+        if d.empty or "Date" not in d.columns:
             continue
-        ser = pd.to_numeric(d.set_index("Date")["Close"], errors="coerce").dropna()
-        ser = ser.resample("D").ffill().dropna().tail(heat_days + 1)
+        cs = series_close(d)
+        if cs.dropna().empty:
+            continue
+        ser = d.set_index("Date")[cs.name].resample("D").ffill().dropna()
+        ser = ser.tail(heat_days + 1)
         if ser.shape[0] < 2:
             continue
         rets = ser.pct_change().dropna() * 100
         heat_data[s] = rets
         dates_idx = rets.index if dates_idx is None else dates_idx.intersection(rets.index)
-
     if heat_data and dates_idx is not None and len(dates_idx) > 0:
         heat_df = pd.DataFrame(heat_data).loc[dates_idx].T
         if heat_df.shape[1] > 0:
             lastcol = heat_df.columns[-1]
             heat_df = heat_df.reindex(heat_df[lastcol].sort_values(ascending=False).index)
-        fig_h = go.Figure(
-            data=go.Heatmap(
-                z=np.round(heat_df.values, 2),
-                x=[d.strftime("%Y-%m-%d") for d in heat_df.columns],
-                y=heat_df.index,
-                colorscale="RdYlGn"
-            )
-        )
+        fig_h = go.Figure(data=go.Heatmap(
+            z=np.round(heat_df.values, 2),
+            x=[d.strftime("%Y-%m-%d") for d in heat_df.columns],
+            y=heat_df.index,
+            colorscale="RdYlGn"
+        ))
         fig_h.update_layout(height=320, margin=dict(t=10, b=10))
         st.plotly_chart(fig_h, use_container_width=True)
     else:
         st.info("Not enough data for heatmap.")
 
-# ---------------- Forecast Tab ----------------
+# ---------- Forecast Tab ----------
 with tab_forecast:
     st.header("Forecast & Backtest")
-    if len(symbols) == 0:
-        st.info("Add symbols in the sidebar.")
-    else:
-        f_sym = st.selectbox("Choose symbol", options=symbols, index=0)
-        f_period = st.selectbox("History period", ["3mo", "6mo", "1y", "2y"], index=0)
-        f_interval = st.selectbox("Interval", ["1d", "1h"], index=0)
-        f_model = st.selectbox("Model", ["Prophet (if installed)", "MovingAvg (fallback)"], index=0)
-        f_horizon = st.selectbox("Horizon (days)", [3, 7, 14, 30], index=1)
+    f_sym = st.selectbox("Choose symbol", options=symbols[:20], index=0)
+    f_period = st.selectbox("History period", ["3mo","6mo","1y","2y"], index=0)
+    f_interval = st.selectbox("Interval", ["1d","1h"], index=0)
+    f_model = st.selectbox("Model", ["Prophet (if installed)","MovingAvg (fallback)"], index=0)
+    f_horizon = st.selectbox("Horizon (days)", [3,7,14,30], index=1)
 
+    if f_sym:
         df_f = fetch_yf(f_sym, period=f_period, interval=f_interval)
-        if df_f.empty or "Close" not in df_f.columns:
+        cs = series_close(df_f).dropna()
+        if df_f.empty or cs.empty:
             st.warning("No historical data.")
         else:
             st.subheader(f"Historical: {f_sym}")
-            st.line_chart(df_f.set_index("Date")["Close"])
+            st.line_chart(df_f.set_index("Date")[cs.name])
 
             # Forecast
             with st.spinner("Running forecast..."):
                 try:
-                    if f_model.startswith("Prophet") and HAS_PROPHET and df_f.shape[0] >= 15:
-                        pf = df_f[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
+                    if f_model.startswith("Prophet") and HAS_PROPHET and df_f.shape[0] >= 30:
+                        pf = df_f[["Date", cs.name]].rename(columns={"Date":"ds", cs.name:"y"})
                         m = Prophet(daily_seasonality=True, weekly_seasonality=True, changepoint_prior_scale=0.05)
                         m.fit(pf)
                         future = m.make_future_dataframe(periods=f_horizon, freq="D")
@@ -485,12 +447,14 @@ with tab_forecast:
                         forecast_vals = tail["yhat"].values
                         fc_dates = tail["ds"].dt.date.values
                     else:
-                        forecast_vals = moving_avg_forecast(df_f["Close"], f_horizon)
+                        arr = moving_avg_forecast(cs, f_horizon)
+                        forecast_vals = arr
                         last_date = df_f["Date"].iloc[-1]
                         fc_dates = [(last_date + timedelta(days=i+1)).date() for i in range(f_horizon)]
                 except Exception as e:
-                    # fallback
-                    forecast_vals = moving_avg_forecast(df_f["Close"], f_horizon)
+                    # Guaranteed fallback
+                    arr = moving_avg_forecast(cs, f_horizon)
+                    forecast_vals = arr
                     last_date = df_f["Date"].iloc[-1]
                     fc_dates = [(last_date + timedelta(days=i+1)).date() for i in range(f_horizon)]
 
@@ -499,47 +463,42 @@ with tab_forecast:
             st.table(fc_table)
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_f["Date"], y=df_f["Close"], mode="lines", name="History"))
+            fig.add_trace(go.Scatter(x=df_f["Date"], y=cs, mode="lines", name="History"))
             fig.add_trace(go.Scatter(x=fc_dates, y=forecast_vals, mode="lines+markers",
-                                     name=f"Forecast {f_horizon}d", line=dict(dash="dash", color="#f5d76e")))
+                                     name=f"Forecast {f_horizon}d",
+                                     line=dict(dash="dash", color="#f5d76e")))
             fig.update_layout(template="plotly_dark", height=520)
             st.plotly_chart(fig, use_container_width=True)
 
             # Backtest (quick)
             from sklearn.metrics import mean_absolute_error, mean_squared_error
-
-            def backtest_simple(df_hist: pd.DataFrame, lookback_days=90):
-                x = df_hist[["Date", "Close"]].copy()
-                x["Close"] = pd.to_numeric(x["Close"], errors="coerce")
-                x = x.dropna()
-                x = x.set_index("Date").asfreq("D", method="pad").dropna()
-                n = len(x)
-                preds, truths = [], []
-                for i in range(15, n-1):  # نیاز به حداقل تاریخچه
-                    train = x.iloc[:i]["Close"]
+            def backtest_simple(df_hist, horizon=1, lookback_days=90):
+                df2 = df_hist[["Date", cs.name]].rename(columns={cs.name:"Close"}).set_index("Date").asfreq("D", method="pad").dropna()
+                n = len(df2); preds=[]; truths=[]
+                for i in range(max(0, n - lookback_days)):
+                    train = df2.iloc[:i+1]["Close"]
+                    if train.shape[0] < 10: 
+                        continue
                     yhat = train.iloc[-1] * (1 + train.pct_change().tail(7).mean())
-                    target_idx = x.index[i] + timedelta(days=1)
-                    if target_idx in x.index:
-                        preds.append(float(yhat))
-                        truths.append(float(x.loc[target_idx, "Close"]))
-                    if len(preds) >= lookback_days:
-                        break
+                    actual_idx = train.index[-1] + timedelta(days=1)
+                    if actual_idx in df2.index:
+                        preds.append(float(yhat)); truths.append(float(df2.loc[actual_idx]["Close"]))
                 if len(truths) == 0:
                     return None
-                preds = np.array(preds); truths = np.array(trruths if False else truths)  # guard
+                preds = np.array(preds); truths = np.array(truths)
                 mae = mean_absolute_error(truths, preds)
                 rmse = np.sqrt(mean_squared_error(truths, preds))
-                mape = float(np.mean(np.abs((truths - preds) / truths)) * 100)
+                mape = float(np.mean(np.abs((truths - preds) / truths)) * 100.0)
                 return {"mae": mae, "rmse": rmse, "mape": mape, "n": len(truths)}
 
             st.subheader("Quick backtest")
-            bt = backtest_simple(df_f, lookback_days=80)
+            bt = backtest_simple(df_f, horizon=1, lookback_days=90)
             if bt:
                 st.write(f"MAE: {bt['mae']:.4f}, RMSE: {bt['rmse']:.4f}, MAPE: {bt['mape']:.2f}% (n={bt['n']})")
             else:
                 st.write("Backtest not available.")
 
-# ---------------- Portfolio ----------------
+# ---------- Portfolio ----------
 with tab_portfolio:
     st.header("Portfolio")
     if "portfolio" not in st.session_state:
@@ -571,12 +530,8 @@ with tab_portfolio:
         price_map = {}
         for s in syms:
             d = fetch_yf(s, period="7d", interval="1d")
-            if not d.empty and "Close" in d.columns:
-                last, _ = safe_last_two(d["Close"])
-                price_map[s] = last * fx if not np.isnan(last) else None
-            else:
-                price_map[s] = None
-
+            c = series_close(d).dropna()
+            price_map[s] = float(c.iloc[-1]) * fx if not c.empty else None
         for p in st.session_state["portfolio"]:
             cur = price_map.get(p["symbol"], None)
             val = cur * p["qty"] if cur is not None else None
@@ -586,17 +541,15 @@ with tab_portfolio:
                 "Symbol": p["symbol"],
                 "Qty": p["qty"],
                 "Cost/unit": fmt_currency(p["cost"], currency),
-                "Current": fmt_currency(cur, currency),
-                "Value": fmt_currency(val, currency),
-                "P&L": fmt_currency(pnl, currency)
+                "Current": fmt_currency(cur, currency) if cur is not None else "—",
+                "Value": fmt_currency(val, currency) if val is not None else "—",
+                "P&L": fmt_currency(pnl, currency) if pnl is not None else "—",
             })
         st.table(pd.DataFrame(rows))
-
         csv = pd.DataFrame(st.session_state["portfolio"]).to_csv(index=False).encode("utf-8")
-        st.download_button("Download CSV", data=csv,
-                           file_name=f"portfolio_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        st.download_button("Download CSV", data=csv, file_name=f"portfolio_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
 
-# ---------------- News ----------------
+# ---------- News ----------
 with tab_news:
     st.header("News")
     st.markdown("Paste an RSS feed or click fetch for CoinDesk headlines.")
@@ -607,43 +560,35 @@ with tab_news:
             r = requests.get(url, timeout=8)
             if r.status_code == 200:
                 txt = r.text
-                # Very simple parsing
+                parts = txt.split("<title>")
                 titles = []
-                for chunk in txt.split("<item>")[1:10]:
-                    if "<title>" in chunk and "</title>" in chunk:
-                        t = chunk.split("<title>")[1].split("</title>")[0]
-                        if "CDATA" in t:
-                            t = t.replace("<![CDATA[", "").replace("]]>", "")
-                        titles.append(t.strip())
-                if not titles:
-                    # fallback
-                    parts = txt.split("<title>")
-                    for p in parts[2:10]:
-                        t = p.split("</title>")[0].strip()
-                        if t:
-                            titles.append(t)
-                if titles:
-                    st.write("Top headlines:")
-                    for t in titles[:8]:
-                        st.write("-", t)
-                else:
-                    st.info("No headlines found.")
+                for p in parts[1:10]:
+                    t = p.split("</title>")[0]
+                    # Skip the channel title itself if present
+                    if "CoinDesk" in t and len(titles) == 0:
+                        continue
+                    titles.append(t)
+                st.write("Top headlines:")
+                for t in titles[:8]:
+                    st.write("-", t)
             else:
                 st.error("Failed to fetch RSS.")
         except Exception as e:
-            st.error("News fetch failed.")
+            st.error("News fetch failed: " + str(e))
 
-# ---------------- About ----------------
+# ---------- About ----------
 with tab_about:
     st.header("About")
     st.markdown("""
 **Global Crypto Insight** — polished crypto dashboard.
-- Live market, Forecasts (Prophet optional), Signals (MA/RSI/MACD)
+
+- Live market, Forecasts (Prophet optional), Signals (MA/RSI/MACD)  
 - Trend heatmap, Fear & Greed gauge, simple Portfolio & CSV export
-""")
-    st.markdown("Run locally: `streamlit run app.py`")
+
+Run locally: `streamlit run app.py`  
+    """)
     st.caption("Educational only — not financial advice.")
 
-# ---------------- Footer ----------------
+# ---------- Footer ----------
 st.markdown("---")
 st.caption("Manage your own risk. For commercial release prepare README & LICENSE.")
