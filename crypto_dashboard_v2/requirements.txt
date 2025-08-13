@@ -5,3 +5,6 @@ numpy
 plotly
 requests
 scikit-learn
+# optional:
+# prophet
+# ta
