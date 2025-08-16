@@ -1,12 +1,11 @@
 # app.py
-# Global Crypto Insight — Stable Version
+# Global Crypto Insight — Stable Version (No cache)
 
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
 from datetime import datetime, timedelta
 
 # ---------- Page setup ----------
@@ -29,7 +28,6 @@ def normalize_ohlc_index(df: pd.DataFrame) -> pd.DataFrame:
     expected = [c for c in ["Open","High","Low","Close","Adj Close","Volume"] if c in df.columns]
     return df[["Date"] + expected].dropna(subset=["Date"]).sort_values("Date")
 
-@st.cache_resource(ttl=300)
 def fetch_yf(symbol: str, period="3mo", interval="1d") -> pd.DataFrame:
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
@@ -77,7 +75,7 @@ for s in [primary] + TOP + extra_list:
 st.header("Market Overview")
 
 summary = []
-for s in symbols[:10]:  # محدود به 10 تا برای سرعت
+for s in symbols[:10]:
     d = fetch_yf(s, period=period, interval=interval)
     c = series_close(d).dropna()
     if c.empty:
