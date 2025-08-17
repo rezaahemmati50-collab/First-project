@@ -682,7 +682,7 @@ with tab_about:
 
 - Dual-source data (Yahoo → CoinGecko fallback)  
 - Live market, Forecasts (Prophet optional), Signals (MA/RSI/MACD)  
-- Trend heatmap, Fear & Greed gauge, simple Portfolio & CSV export
+- Trend heatmap, Fear & Greed gauge, simple Portfolio & CSV export 1
 
 Run: `streamlit run app.py`  
     """)
