@@ -2,15 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
 
-# ---------- Page setup ----------
 st.set_page_config(page_title="Crypto Dashboard", page_icon="🟡", layout="wide")
 
 pd.options.mode.chained_assignment = None
 
-# ---------- Helpers ----------
 def ensure_flat_columns(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
@@ -27,10 +23,9 @@ def normalize_ohlc_index(df: pd.DataFrame) -> pd.DataFrame:
     expected = [c for c in ["Open","High","Low","Close","Adj Close","Volume"] if c in df.columns]
     return df[["Date"] + expected].dropna(subset=["Date"]).sort_values("Date")
 
-@st.cache_data(ttl=180)
 def fetch_yf(symbol: str, period="3mo", interval="1d") -> pd.DataFrame:
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False)
+        df = yf.download(symbol, period=period, interval=interval, progress=False, threads=False)
         if df is None or df.empty:
             return pd.DataFrame()
         return normalize_ohlc_index(df)
@@ -40,10 +35,9 @@ def fetch_yf(symbol: str, period="3mo", interval="1d") -> pd.DataFrame:
 def series_close(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
         return pd.Series(dtype=float)
-    col = "Close" if "Close" in df.columns else None
-    if col is None:
+    if "Close" not in df.columns:
         return pd.Series(dtype=float)
-    return pd.to_numeric(df[col], errors="coerce")
+    return pd.to_numeric(df["Close"], errors="coerce")
 
 def moving_avg_forecast(close_s: pd.Series, days: int) -> np.ndarray:
     try:
