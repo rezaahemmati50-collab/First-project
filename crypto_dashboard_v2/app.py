@@ -1,20 +1,18 @@
 import streamlit as st
-import yfinance as yf
+import requests
 import pandas as pd
 
-st.set_page_config(page_title="Crypto Test", page_icon="💹", layout="wide")
-st.title("Crypto Quick Test")
+st.title("Crypto from CoinGecko")
 
-symbol = "BTC-USD"
-st.write(f"Fetching data for: {symbol}")
+url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+params = {"vs_currency": "usd", "days": "7"}  # 7 روز گذشته
+r = requests.get(url, params=params)
 
-try:
-    df = yf.download(symbol, period="5d", interval="1d", progress=False, timeout=5)
-    if df is None or df.empty:
-        st.warning(f"⚠️ No data received for {symbol}")
-    else:
-        st.success("✅ Data fetched successfully")
-        st.dataframe(df.tail())
-        st.line_chart(df["Close"])
-except Exception as e:
-    st.error(f"Error: {e}")
+if r.status_code == 200:
+    data = r.json()
+    prices = data["prices"]
+    df = pd.DataFrame(prices, columns=["timestamp", "price"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    st.line_chart(df.set_index("timestamp")["price"])
+else:
+    st.error("CoinGecko API not responding")
